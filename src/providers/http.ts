@@ -1,8 +1,14 @@
+/* oxlint-disable sonarjs/max-union-size -- Safe diagnostic reasons are a fixed explicit allowlist. */
 /** Sanitized provider failure; deliberately excludes raw responses and request URLs. */
 export interface ProviderFailure {
   readonly kind: "http" | "network" | "invalid-response";
   readonly status?: number;
   readonly retryAt?: number;
+  readonly reason?:
+    | "illegal-invocation"
+    | "timeout"
+    | "invalid-header"
+    | "other";
 }
 
 /** Expected network and parsing failures remain values. */
@@ -30,11 +36,16 @@ export const request = async (
   const now = options.now ?? Date.now;
 
   try {
-    const response = await (options.fetch ?? fetch)(url, {
+    const requestInit: RequestInit = {
       ...init,
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
-    });
+    };
+
+    const response =
+      options.fetch === undefined
+        ? await globalThis.fetch(url, requestInit)
+        : await options.fetch(url, requestInit);
 
     if (response.ok) {
       return { ok: true, value: response };
@@ -81,8 +92,24 @@ export const request = async (
       },
       ok: false,
     };
-  } catch {
-    return { error: { kind: "network", retryAt: now() + 60_000 }, ok: false };
+  } catch (error) {
+    let reason: "illegal-invocation" | "timeout" | "invalid-header" | "other" =
+      "other";
+
+    if (error instanceof Error) {
+      if (error.message.includes("Illegal invocation")) {
+        reason = "illegal-invocation";
+      } else if (error.name === "TimeoutError" || error.name === "AbortError") {
+        reason = "timeout";
+      } else if (error.message.toLowerCase().includes("header")) {
+        reason = "invalid-header";
+      }
+    }
+
+    return {
+      error: { kind: "network", reason, retryAt: now() + 60_000 },
+      ok: false,
+    };
   }
 };
 

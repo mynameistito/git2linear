@@ -183,6 +183,13 @@ export class ReconciliationRunner implements StepRunner {
     // Explicit projection: never persist a vendor exception, response, or request.
     state.providerFailure = { kind: failure.kind };
 
+    if (failure.reason !== undefined) {
+      state.providerFailure = {
+        ...state.providerFailure,
+        reason: failure.reason,
+      };
+    }
+
     if (failure.status !== undefined) {
       state.providerFailure = {
         ...state.providerFailure,

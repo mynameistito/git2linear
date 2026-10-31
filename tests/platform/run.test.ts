@@ -150,3 +150,16 @@ test("diagnostics expose only validated scalar fields and discard nested secret 
     })
   ).toEqual({});
 });
+
+test("provider reason diagnostics accept only the fixed nonsecret reason allowlist", () => {
+  expect(
+    checkpointDiagnostics({
+      providerFailure: { kind: "network", reason: "illegal-invocation" },
+    }).providerFailure?.reason
+  ).toBe("illegal-invocation");
+  expect(
+    checkpointDiagnostics({
+      providerFailure: { kind: "network", reason: "secret-token" },
+    }).providerFailure?.reason
+  ).toBeUndefined();
+});

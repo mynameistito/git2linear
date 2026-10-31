@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-unknown-parameters -- Receiver regression deliberately inspects the runtime global this identity. */
 /* oxlint-disable vitest/prefer-importing-vitest-globals -- Bun is the actual test runtime. */
 /* oxlint-disable eslint/require-await, eslint/no-nested-ternary, sonarjs/no-nested-conditional -- Deterministic async provider fixture responses mirror the transport contract. */
 /* oxlint-disable anti-slop/no-runtime-typeof -- Parsing serialized request body at the fake transport boundary. */
@@ -186,4 +187,49 @@ test("absent native webhook credentials never send a hook mutation", async () =>
   const result = await client.createHook(repository);
   expect(result.ok).toBe(false);
   expect(writes).toBe(0);
+});
+
+test("transport failures classify receiver errors without retaining sensitive exception text", async () => {
+  const result = await request(
+    "https://secret.example/path",
+    {},
+    {
+      fetch: async () => {
+        throw new TypeError(
+          "Illegal invocation secret-token https://private.example"
+        );
+      },
+      now: () => 0,
+    }
+  );
+
+  expect(result).toEqual({
+    error: { kind: "network", reason: "illegal-invocation", retryAt: 60_000 },
+    ok: false,
+  });
+  expect(JSON.stringify(result)).not.toContain("secret");
+});
+
+test("default transport preserves the Workers global fetch receiver", async () => {
+  const original = globalThis.fetch;
+  let receiverValid = false;
+
+  const replacement = Object.assign(
+    async function replacement(this: typeof globalThis): Promise<Response> {
+      receiverValid = this === globalThis;
+
+      return Response.json({ ok: true });
+    },
+    { preconnect: original.preconnect }
+  );
+
+  globalThis.fetch = replacement;
+
+  try {
+    const result = await request("https://example.com", {}, {});
+    expect(result.ok).toBe(true);
+    expect(receiverValid).toBe(true);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

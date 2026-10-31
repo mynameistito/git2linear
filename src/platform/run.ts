@@ -158,7 +158,12 @@ export class RunCoordinator {
 export interface CheckpointDiagnostics {
   phase?: string;
   attempts?: number;
-  providerFailure?: { kind: string; status?: number; retryAt?: number };
+  providerFailure?: {
+    kind: string;
+    status?: number;
+    retryAt?: number;
+    reason?: string;
+  };
 }
 
 /* oxlint-disable eslint/complexity, sonarjs/expression-complexity, anti-slop/no-unknown-parameters -- Boundary parser deliberately verifies each diagnostic scalar and discards everything else. */
@@ -213,6 +218,16 @@ export const checkpointDiagnostics = (
   }
 
   safe.providerFailure = { kind: failure.kind };
+
+  if (
+    "reason" in failure &&
+    (failure.reason === "illegal-invocation" ||
+      failure.reason === "timeout" ||
+      failure.reason === "invalid-header" ||
+      failure.reason === "other")
+  ) {
+    safe.providerFailure.reason = failure.reason;
+  }
 
   if (
     "status" in failure &&
