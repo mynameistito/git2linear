@@ -1,9 +1,11 @@
+/* oxlint-disable sonarjs/no-duplicate-string -- Fixed internal metadata keys identify the same durable records across lifecycle operations. */
 /* oxlint-disable anti-slop/no-runtime-typeof -- Private persisted checkpoint safe diagnostic projection. */
 import { DurableObject } from "cloudflare:workers";
 
 import type { RepositoryStatus } from "../application/runner";
 import { createRunner } from "../application/runner";
 import type { Env } from "./env";
+import { pruneReportBatch } from "./retention";
 import {
   RunCoordinator,
   checkpointDiagnostics,
@@ -36,6 +38,11 @@ export class Reconciler extends DurableObject<Env> {
             return current;
           }
 
+          if (current !== undefined) {
+            await transaction.put("previous-run-id", current.runId);
+          }
+
+          await transaction.delete("report-retention-cursor");
           await transaction.put("run", record);
 
           return record;
@@ -136,7 +143,55 @@ export class Reconciler extends DurableObject<Env> {
   /** Platform lifecycle contract. */
   override async alarm(): Promise<void> {
     await this.#coordinator.advance();
+
+    const moreReports = await this.ctx.storage.transaction(
+      async (transaction) => {
+        const current = await transaction.get<RunRecord>("run");
+
+        if (current === undefined) {
+          return false;
+        }
+
+        const previous = await transaction.get<string>("previous-run-id");
+
+        return await pruneReportBatch(
+          {
+            cursor: async () =>
+              await transaction.get<string>("report-retention-cursor"),
+            keys: async (after, limit) => {
+              const options: DurableObjectListOptions = {
+                limit,
+                prefix: "repository:",
+              };
+
+              if (after !== undefined) {
+                options.startAfter = after;
+              }
+
+              const entries = await transaction.list(options);
+
+              return [...entries.keys()];
+            },
+            remove: async (keys) => {
+              await transaction.delete(keys);
+            },
+            saveCursor: async (cursor) => {
+              await (cursor === null
+                ? transaction.delete("report-retention-cursor")
+                : transaction.put("report-retention-cursor", cursor));
+            },
+          },
+          current.runId,
+          previous
+        );
+      }
+    );
+
     const record = await this.ctx.storage.get<RunRecord>("run");
+
+    if (moreReports && record?.status !== "running") {
+      await this.ctx.storage.setAlarm(Date.now() + 1000);
+    }
 
     if (
       record?.dryRun === true &&
