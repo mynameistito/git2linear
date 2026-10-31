@@ -9,8 +9,8 @@ import type { HttpOptions, ProviderResult } from "./http";
 export interface GitHubOptions extends HttpOptions {
   readonly token: string;
   readonly owner: string;
-  readonly endpoint: string;
-  readonly webhookSecret: string;
+  readonly endpoint?: string;
+  readonly webhookSecret?: string;
 }
 
 const record = (input: unknown): input is Record<string, unknown> =>
@@ -272,6 +272,31 @@ export class GitHubClient {
     repository: Repository,
     id: number | null
   ): Promise<ProviderResult<RepositoryHook>> {
+    if (
+      this.#options.endpoint === undefined ||
+      this.#options.webhookSecret === undefined
+    ) {
+      return { error: { kind: "invalid-response" }, ok: false };
+    }
+
+    try {
+      const endpoint = new URL(this.#options.endpoint);
+
+      if (
+        endpoint.protocol !== "https:" ||
+        !(
+          endpoint.hostname === "linear.app" ||
+          endpoint.hostname.endsWith(".linear.app")
+        ) ||
+        endpoint.username !== "" ||
+        endpoint.password !== ""
+      ) {
+        return { error: { kind: "invalid-response" }, ok: false };
+      }
+    } catch {
+      return { error: { kind: "invalid-response" }, ok: false };
+    }
+
     const result = await this.#call(
       GitHubClient.#path(repository) + (id === null ? "" : `/${id}`),
       id === null ? "POST" : "PATCH",

@@ -3,8 +3,8 @@ export interface Env {
   RECONCILER: DurableObjectNamespace;
   GITHUB_TOKEN: string;
   LINEAR_API_KEY: string;
-  LINEAR_WEBHOOK_URL: string;
-  LINEAR_WEBHOOK_SECRET: string;
+  LINEAR_WEBHOOK_URL?: string;
+  LINEAR_WEBHOOK_SECRET?: string;
   MANUAL_TRIGGER_TOKEN: string;
   GITHUB_OWNER: string;
   LINEAR_TEAM_ID: string;

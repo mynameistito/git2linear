@@ -20,7 +20,7 @@ const hook = {
   config: {
     content_type: "form",
     insecure_ssl: "1",
-    url: "https://linear.example/secret",
+    url: "https://api.linear.app/hooks/test-only",
   },
   events: ["issues"],
   id: 10,
@@ -168,4 +168,22 @@ test("hook discovery fails closed at five pages instead of exceeding platform li
     ok: false,
   });
   expect(calls).toBe(5);
+});
+
+test("absent native webhook credentials never send a hook mutation", async () => {
+  let writes = 0;
+
+  const client = new GitHubClient({
+    fetch: async () => {
+      writes += 1;
+
+      return Response.json({});
+    },
+    owner: "mynameistito",
+    token: "test",
+  });
+
+  const result = await client.createHook(repository);
+  expect(result.ok).toBe(false);
+  expect(writes).toBe(0);
 });

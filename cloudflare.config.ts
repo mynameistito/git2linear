@@ -12,8 +12,6 @@ export default defineConfig({
       LINEAR_API_KEY: bindings.secret(),
       LINEAR_TEAM_ID: bindings.text(process.env.LINEAR_TEAM_ID ?? ""),
       LINEAR_TEAM_KEY: bindings.text("MY"),
-      LINEAR_WEBHOOK_SECRET: bindings.secret(),
-      LINEAR_WEBHOOK_URL: bindings.secret(),
       MANUAL_TRIGGER_TOKEN: bindings.secret(),
       RECONCILER: bindings.durableObject({
         exportName: "Reconciler",

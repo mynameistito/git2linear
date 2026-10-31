@@ -1,3 +1,4 @@
+/* oxlint-disable sonarjs/no-undefined-assignment -- Tests explicitly remove an optional capability from a shared fixture. */
 import { expect, test } from "bun:test";
 
 import { ReconciliationRunner } from "../../src/application/runner";
@@ -408,7 +409,7 @@ test("duplicate endpoint hooks produce persisted manual action", async () => {
         value: [99, 100].map((id) => ({
           active: true,
           contentType: "json",
-          endpoint: base.endpoint,
+          endpoint: "https://native.example",
           events: ["push"],
           id,
           insecureSsl: "0",
@@ -420,4 +421,57 @@ test("duplicate endpoint hooks produce persisted manual action", async () => {
   expect(result.done).toBe(true);
   expect(result.summary.manualActionRequired).toBe(1);
   expect(records[0]?.reason).toBe("duplicate-endpoint-hooks");
+});
+
+test("missing commit credentials still reconcile project identity without accessing hooks", async () => {
+  const records: RepositoryStatus[] = [];
+  const base = configuredOptions(records);
+  let identities = 0;
+
+  const result = await finish({
+    ...base,
+    endpoint: undefined,
+    github: {
+      ...base.github,
+      listHooks: async () => {
+        throw new Error("must not access hooks");
+      },
+    },
+    store: {
+      ...base.store,
+      saveIdentity: async () => {
+        identities += 1;
+      },
+    },
+  });
+
+  expect(result.done).toBe(true);
+  expect(identities).toBe(1);
+  expect(result.summary.failed).toBe(0);
+  expect(records[0]?.reason).toBe("commit-webhook-credentials-unavailable");
+  expect(result.summary.manualActionRequired).toBe(1);
+});
+
+test("missing commit credentials dry run reports manual hooks and project plan", async () => {
+  const records: RepositoryStatus[] = [];
+  const base = configuredOptions(records);
+  await finish(
+    {
+      ...base,
+      endpoint: undefined,
+      github: {
+        ...base.github,
+        listHooks: async () => {
+          throw new Error("must not access hooks");
+        },
+      },
+    },
+    true
+  );
+  expect(records[0]?.reason).toBe("commit-webhook-credentials-unavailable");
+  expect(records[0]?.plannedActions).toEqual([
+    "project:reuse",
+    "hook:manual",
+    "native-sync:manual",
+  ]);
 });

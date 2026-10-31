@@ -77,7 +77,7 @@ export interface RunnerOptions {
   readonly store: ReconciliationStore;
   readonly owner: string;
   readonly teamId: string;
-  readonly endpoint: string;
+  readonly endpoint?: string;
 }
 
 /** Each step handles one inventory page or one repository, with bounded durable retry. */
@@ -265,13 +265,22 @@ export class ReconciliationRunner implements StepRunner {
       return ReconciliationRunner.#output(state);
     }
 
-    const hooks = await github.listHooks(repository);
+    const hooks =
+      this.#options.endpoint === undefined
+        ? { ok: true as const, value: [] }
+        : await github.listHooks(repository);
 
     if (!hooks.ok) {
       return await this.#retry(state, hooks.error);
     }
 
-    const hookPlan = planHook(hooks.value, this.#options.endpoint);
+    const hookPlan =
+      this.#options.endpoint === undefined
+        ? {
+            kind: "manual" as const,
+            reason: "commit-webhook-credentials-unavailable" as const,
+          }
+        : planHook(hooks.value, this.#options.endpoint);
 
     if (dryRun) {
       const plannedActions = [
@@ -286,7 +295,7 @@ export class ReconciliationRunner implements StepRunner {
         ping: "not-requested",
         plannedActions,
         pushProcessing: "unverified",
-        reason: "dry-run-plan",
+        reason: hookPlan.kind === "manual" ? hookPlan.reason : "dry-run-plan",
       });
 
       if (plan.kind === "create" || hookPlan.kind === "create") {
@@ -398,13 +407,23 @@ export class ReconciliationRunner implements StepRunner {
     });
 
     if (hookPlan.kind === "manual") {
+      const projectOutcome =
+        state.change === "none" ? "already-configured" : state.change;
       await this.#record(repository.id, {
         manualActionRequired: true,
-        outcome: "skipped",
+        outcome: projectOutcome,
         ping: "not-requested",
         pushProcessing: "unverified",
         reason: hookPlan.reason,
+        supportedStateVerified: true,
       });
+
+      if (state.change === "none") {
+        state.summary.alreadyConfigured += 1;
+      } else {
+        state.summary[state.change] += 1;
+      }
+
       state.summary.manualActionRequired += 1;
       state.index += 1;
       state.attempts = 0;
