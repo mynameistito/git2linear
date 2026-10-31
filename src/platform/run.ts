@@ -32,6 +32,7 @@ export interface StepRunner {
 
 /** Platform lifecycle contract. */
 export interface RunRecord extends StepInput {
+  readonly retryAt?: number;
   readonly status: "running" | "complete" | "failed";
   readonly summary: RunSummary;
   readonly startedAt: number;
@@ -54,6 +55,7 @@ export const emptySummary = (): RunSummary => ({
 
 /** Storage transaction serializes start decisions without holding a lock over network IO. */
 export interface RunStore {
+  getAlarm: () => Promise<number | null>;
   get: () => Promise<RunRecord | undefined>;
   put: (record: RunRecord) => Promise<void>;
   start: (record: RunRecord) => Promise<RunRecord>;
@@ -80,20 +82,24 @@ export class RunCoordinator {
    */
   async start(dryRun: boolean): Promise<RunRecord> {
     const now = this.#now();
+    const requestedId = crypto.randomUUID();
 
     const record = await this.#store.start({
       checkpoint: null,
       dryRun,
       failures: 0,
-      runId: crypto.randomUUID(),
+      runId: requestedId,
       startedAt: now,
       status: "running",
       summary: emptySummary(),
       updatedAt: now,
     });
 
-    if (record.status === "running") {
-      await this.#store.schedule(now + 1000);
+    if (
+      record.status === "running" &&
+      (record.runId === requestedId || (await this.#store.getAlarm()) === null)
+    ) {
+      await this.#store.schedule(Math.max(now + 1000, record.retryAt ?? 0));
     }
 
     return record;
@@ -122,6 +128,7 @@ export class RunCoordinator {
           ...record,
           checkpoint: next.checkpoint,
           failures: 0,
+          retryAt: next.retryAt ?? 0,
           status: next.done ? "complete" : "running",
           summary: next.summary,
           updatedAt: this.#now(),
@@ -138,6 +145,7 @@ export class RunCoordinator {
         await this.#store.put({
           ...record,
           failures,
+          retryAt: this.#now() + Math.min(60_000, 1000 * 2 ** failures),
           status: failures >= 5 ? "failed" : "running",
           updatedAt: this.#now(),
         });
@@ -249,4 +257,28 @@ export const checkpointDiagnostics = (
   }
 
   return safe;
+};
+
+/** Recover a stable repository identity from a run-scoped record key.
+ * @param key - Persisted status record key.
+ * @param prefix - Current run repository prefix.
+ * @returns Positive safe repository ID, or null for a malformed key.
+ */
+export const repositoryIdFromRecordKey = (
+  key: string,
+  prefix: string
+): number | null => {
+  if (!key.startsWith(prefix)) {
+    return null;
+  }
+
+  const suffix = key.slice(prefix.length);
+
+  if (!/^\d+$/u.test(suffix)) {
+    return null;
+  }
+
+  const id = Number(suffix);
+
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 };

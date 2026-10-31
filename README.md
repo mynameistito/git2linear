@@ -6,7 +6,7 @@ A modular TypeScript Cloudflare Worker reconciles repositories owned by `mynamei
 
 The Worker is deployed at https://git2linear.mynameistito.workers.dev with hourly cron `0 * * * *` and `APPLY_ENABLED=false`. Version `06fce59a-c2de-42d9-9aed-27ce545fe4eb` was deployed on 2026-11-01 (Auckland). The three core runtime secrets were provisioned successfully. Native commit-webhook credentials remain absent; no placeholder endpoint or exposed signing secret was provisioned.
 
-An authenticated local dry run discovered 203 owned repositories and 202 existing Linear projects: one project creation, 121 repository-resource attachments, 81 archived repositories skipped, zero failures, and 122 repositories requiring manual native integration action. These are planned changes, not evidence of applied mutations. The authenticated remote dry run was accepted with HTTP 202; completion and final provider state must be verified before claiming reconciliation success.
+An authenticated local dry run discovered 203 owned repositories and 202 existing Linear projects: one project creation, 121 repository-resource attachments, 81 archived repositories skipped, zero failures, and 122 repositories requiring manual native integration action. These are planned changes, not evidence of applied mutations. The authenticated remote dry run completed successfully with the same counts and 203 persisted repository reports. Version `1d496203-a198-46cb-a3fd-eb7108b8cffb` completed this verification. First apply and final provider state verification remain pending.
 
 ## Current integration limitation
 

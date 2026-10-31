@@ -6,6 +6,7 @@ import {
   RunCoordinator,
   emptySummary,
   checkpointDiagnostics,
+  repositoryIdFromRecordKey,
 } from "../../src/platform/run";
 import type { RunRecord, RunStore, StepRunner } from "../../src/platform/run";
 
@@ -15,6 +16,7 @@ const memory = () => {
 
   const store: RunStore = {
     get: async () => record,
+    getAlarm: async () => alarms.at(-1) ?? null,
     put: async (next) => {
       record = structuredClone(next);
     },
@@ -162,4 +164,57 @@ test("provider reason diagnostics accept only the fixed nonsecret reason allowli
       providerFailure: { kind: "network", reason: "secret-token" },
     }).providerFailure?.reason
   ).toBeUndefined();
+});
+
+test("overlapping manual starts preserve provider retry deadlines", async () => {
+  const state = memory();
+
+  const runner: StepRunner = {
+    step: async () => ({
+      checkpoint: 1,
+      done: false,
+      retryAt: 900_000,
+      summary: emptySummary(),
+    }),
+  };
+
+  const coordinator = new RunCoordinator(state.store, runner, () => 100);
+  const run = await coordinator.start(true);
+  await coordinator.advance();
+  const alarmsBefore = state.alarms.length;
+  expect((await coordinator.start(false)).runId).toBe(run.runId);
+  expect(state.alarms).toHaveLength(alarmsBefore);
+  expect(state.alarms.at(-1)).toBe(900_000);
+});
+
+test("missing alarm recovery respects persisted provider retry deadline", async () => {
+  const state = memory();
+
+  const runner: StepRunner = {
+    step: async () => ({
+      checkpoint: 1,
+      done: false,
+      retryAt: 900_000,
+      summary: emptySummary(),
+    }),
+  };
+
+  const coordinator = new RunCoordinator(state.store, runner, () => 100);
+  await coordinator.start(true);
+  await coordinator.advance();
+  state.alarms.length = 0;
+  await coordinator.start(true);
+  expect(state.alarms.at(-1)).toBe(900_000);
+});
+
+test("run-scoped report keys retain stable repository IDs and reject foreign or malformed keys", () => {
+  expect(
+    repositoryIdFromRecordKey("repository:run:42", "repository:run:")
+  ).toBe(42);
+  expect(
+    repositoryIdFromRecordKey("repository:other:42", "repository:run:")
+  ).toBeNull();
+  expect(
+    repositoryIdFromRecordKey("repository:run:not-id", "repository:run:")
+  ).toBeNull();
 });

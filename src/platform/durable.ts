@@ -1,9 +1,14 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- Private persisted checkpoint safe diagnostic projection. */
 import { DurableObject } from "cloudflare:workers";
 
+import type { RepositoryStatus } from "../application/runner";
 import { createRunner } from "../application/runner";
 import type { Env } from "./env";
-import { RunCoordinator, checkpointDiagnostics } from "./run";
+import {
+  RunCoordinator,
+  checkpointDiagnostics,
+  repositoryIdFromRecordKey,
+} from "./run";
 import type { RunRecord, RunStore } from "./run";
 
 /** One coordinator per configured owner/workspace, never per repository. */
@@ -16,6 +21,7 @@ export class Reconciler extends DurableObject<Env> {
 
     const store: RunStore = {
       get: async () => await ctx.storage.get<RunRecord>("run"),
+      getAlarm: async () => await ctx.storage.getAlarm(),
       put: async (record) => {
         await ctx.storage.put("run", record);
       },
@@ -72,13 +78,17 @@ export class Reconciler extends DurableObject<Env> {
           options.startAfter = after;
         }
 
-        const entries = await this.ctx.storage.list(options);
+        const entries = await this.ctx.storage.list<RepositoryStatus>(options);
 
         const keys = [...entries.keys()];
 
         return Response.json({
           nextCursor: entries.size === 100 ? (keys.at(-1) ?? null) : null,
-          repositories: [...entries.values()],
+          repositories: [...entries].flatMap(([key, status]) => {
+            const repositoryId = repositoryIdFromRecordKey(key, prefix);
+
+            return repositoryId === null ? [] : [{ ...status, repositoryId }];
+          }),
           runId: record.runId,
         });
       }
