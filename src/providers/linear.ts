@@ -73,7 +73,7 @@ export class LinearProjects {
    */
   async page(after: string | null): Promise<ProviderResult<ProjectPage>> {
     const result = await this.#query(
-      `query Projects($after:String){projects(first:50,after:$after,includeArchived:true){nodes{id name description archivedAt teams(first:100){nodes{id} pageInfo{hasNextPage}} externalLinks(first:100){nodes{url} pageInfo{hasNextPage}}}pageInfo{hasNextPage endCursor}}}`,
+      `query Projects($after:String){projects(first:25,after:$after,includeArchived:true){nodes{id name description archivedAt teams(first:10){nodes{id} pageInfo{hasNextPage}} externalLinks(first:10){nodes{url} pageInfo{hasNextPage}}}pageInfo{hasNextPage endCursor}}}`,
       { after }
     );
 

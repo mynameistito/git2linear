@@ -409,6 +409,7 @@ export class ReconciliationRunner implements StepRunner {
     if (hookPlan.kind === "manual") {
       const projectOutcome =
         state.change === "none" ? "already-configured" : state.change;
+
       await this.#record(repository.id, {
         manualActionRequired: true,
         outcome: projectOutcome,

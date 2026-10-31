@@ -69,6 +69,9 @@ test("paginated inventory requests archived projects and retains existing summar
   const client = new LinearProjects("test-credential", {
     fetch: transport((body) => {
       expect(body.query).toContain("includeArchived:true");
+      expect(body.query).toContain("projects(first:25");
+      expect(body.query).toContain("teams(first:10)");
+      expect(body.query).toContain("externalLinks(first:10)");
       cursors.push(body.variables.after);
 
       return body.variables.after === null
