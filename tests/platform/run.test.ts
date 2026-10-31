@@ -1,7 +1,7 @@
 /* oxlint-disable eslint/require-await, unicorn/no-await-expression-member, vitest/prefer-importing-vitest-globals -- Bun async storage fixtures. */
 import { expect, test } from "bun:test";
 
-import { authorized } from "../../src/platform/auth";
+import { authorized, scheduledReady } from "../../src/platform/auth";
 import { RunCoordinator, emptySummary } from "../../src/platform/run";
 import type { RunRecord, RunStore, StepRunner } from "../../src/platform/run";
 
@@ -78,6 +78,9 @@ test("transient failed step retains checkpoint and redacts failure then resumes"
 });
 
 test("manual authentication rejects missing, wrong and short tokens", async () => {
+  expect(
+    await authorized(new Request("https://worker/status"), undefined)
+  ).toBe(false);
   const token = "x".repeat(43);
   expect(await authorized(new Request("https://worker/status"), token)).toBe(
     false
@@ -101,4 +104,17 @@ test("manual authentication rejects missing, wrong and short tokens", async () =
   expect(await authorized(new Request("https://worker/status"), "weak")).toBe(
     false
   );
+});
+
+test("bootstrap cannot schedule work until every core credential is present", () => {
+  const complete = {
+    GITHUB_TOKEN: "github",
+    LINEAR_API_KEY: "linear",
+    MANUAL_TRIGGER_TOKEN: "x".repeat(43),
+  };
+  expect(scheduledReady({})).toBe(false);
+  expect(scheduledReady({ ...complete, GITHUB_TOKEN: "" })).toBe(false);
+  expect(scheduledReady({ ...complete, LINEAR_API_KEY: "" })).toBe(false);
+  expect(scheduledReady({ ...complete, MANUAL_TRIGGER_TOKEN: "" })).toBe(false);
+  expect(scheduledReady(complete)).toBe(true);
 });

@@ -5,9 +5,9 @@
  */
 export const authorized = async (
   request: Request,
-  token: string
+  token: string | undefined
 ): Promise<boolean> => {
-  if (token.length < 43) {
+  if (token === undefined || token.length < 43) {
     return false;
   }
 
@@ -34,4 +34,23 @@ export const authorized = async (
   }
 
   return difference === 0;
+};
+
+/** Check bootstrap readiness before scheduled work can access providers.
+ * @param credentials - Runtime core credentials, absent during bootstrap.
+ * @returns Whether scheduled reconciliation can start.
+ */
+export const scheduledReady = (credentials: {
+  readonly GITHUB_TOKEN?: string;
+  readonly LINEAR_API_KEY?: string;
+  readonly MANUAL_TRIGGER_TOKEN?: string;
+}): boolean => {
+  const providersPresent = [
+    credentials.GITHUB_TOKEN,
+    credentials.LINEAR_API_KEY,
+  ].every((value) => (value ?? "") !== "");
+
+  return (
+    providersPresent && (credentials.MANUAL_TRIGGER_TOKEN ?? "").length >= 43
+  );
 };

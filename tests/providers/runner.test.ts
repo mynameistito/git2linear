@@ -475,3 +475,45 @@ test("missing commit credentials dry run reports manual hooks and project plan",
     "native-sync:manual",
   ]);
 });
+
+test("dry run names project rename and repository attachment without exposing URLs", async () => {
+  const records: RepositoryStatus[] = [];
+  const base = configuredOptions(records);
+  await finish(
+    {
+      ...base,
+      linear: {
+        ...base.linear,
+        page: async () => ({
+          ok: true,
+          value: {
+            nextCursor: null,
+            projects: [
+              {
+                archived: false,
+                id: "p",
+                name: "old",
+                teamIds: ["team"],
+                urls: [],
+              },
+            ],
+          },
+        }),
+      },
+      store: {
+        ...base.store,
+        identities: async () => [
+          {
+            projectId: "p",
+            repositoryId: 1,
+            repositoryUrl: "https://github.com/owner/repo",
+          },
+        ],
+      },
+    },
+    true
+  );
+  expect(records[0]?.plannedActions).toContain("project:rename");
+  expect(records[0]?.plannedActions).toContain("project:attach-repository-url");
+  expect(JSON.stringify(records[0]?.plannedActions)).not.toContain("https:");
+});

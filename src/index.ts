@@ -1,4 +1,4 @@
-import { authorized } from "./platform/auth";
+import { authorized, scheduledReady } from "./platform/auth";
 import type { Env } from "./platform/env";
 
 export { Reconciler } from "./platform/durable";
@@ -30,6 +30,10 @@ export default {
     return new Response(response.body, { headers, status: response.status });
   },
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    if (!scheduledReady(env)) {
+      return;
+    }
+
     const dryRun = env.APPLY_ENABLED !== "true";
     await coordinator(env).fetch(
       new Request(`https://internal/reconcile?dryRun=${dryRun}`, {

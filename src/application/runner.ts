@@ -289,6 +289,14 @@ export class ReconciliationRunner implements StepRunner {
         "native-sync:manual",
       ];
 
+      if (plan.kind === "reuse" && plan.updateName !== null) {
+        plannedActions.push("project:rename");
+      }
+
+      if (plan.kind === "reuse" && plan.attachUrl !== null) {
+        plannedActions.push("project:attach-repository-url");
+      }
+
       await this.#record(repository.id, {
         manualActionRequired: true,
         outcome: "skipped",
