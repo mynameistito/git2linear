@@ -48,6 +48,7 @@ export class Reconciler extends DurableObject<Env> {
   override async fetch(request: Request): Promise<Response> {
     if (request.method === "GET") {
       const record = await this.ctx.storage.get<RunRecord>("run");
+      const nextAlarm = await this.ctx.storage.getAlarm();
       const url = new URL(request.url);
 
       if (record && url.searchParams.get("details") === "true") {
@@ -81,6 +82,7 @@ export class Reconciler extends DurableObject<Env> {
       return Response.json(
         record
           ? {
+              continuation: { failures: record.failures, nextAlarm },
               dryRun: record.dryRun,
               runId: record.runId,
               startedAt: record.startedAt,
