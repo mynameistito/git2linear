@@ -2,6 +2,12 @@
 
 A modular TypeScript Cloudflare Worker reconciles repositories owned by `mynameistito` with the Linear `MY` team. It provisions projects and native GitHub push hooks. It never proxies commits, imports historical issues, deletes resources, or creates teams.
 
+## Deployment status
+
+The Worker is deployed at https://git2linear.mynameistito.workers.dev with hourly cron `0 * * * *` and `APPLY_ENABLED=false`. Version `06fce59a-c2de-42d9-9aed-27ce545fe4eb` was deployed on 2026-11-01 (Auckland). The three core runtime secrets were provisioned successfully. Native commit-webhook credentials remain absent; no placeholder endpoint or exposed signing secret was provisioned.
+
+An authenticated local dry run discovered 203 owned repositories and 202 existing Linear projects: one project creation, 121 repository-resource attachments, 81 archived repositories skipped, zero failures, and 122 repositories requiring manual native integration action. These are planned changes, not evidence of applied mutations. The authenticated remote dry run was accepted with HTTP 202; completion and final provider state must be verified before claiming reconciliation success.
+
 ## Current integration limitation
 
 Investigation on 2026-11-01 observed 207 saved GitHub integration mappings, including multiple bidirectional mappings under MY. Existing mappings and the default issue repository are preserved. The connected OAuth credential previously rejected integration-settings mutations. A supported unattended API and sufficient permissions for changing native issue-sync configuration have not been established. Consequently, the Worker reports native two-way sync and project routing as manual actions. A project does not automatically receive synced issues. No competing custom issue sync is installed.
@@ -34,7 +40,7 @@ bun run deploy
 
 For the first deployment only, set `$env:BOOTSTRAP_MODE = 'true'` and run `bun run deploy` to create the Worker without required secret declarations. Bootstrap rejects unauthenticated requests and skips scheduled work while core credentials are absent. Inject the three required secrets with the provisioning script below, run `Remove-Item Env:BOOTSTRAP_MODE`, then run `bun run deploy` again with `APPLY_ENABLED=false`. Obtain and review a completed remote dry run before enabling apply. Never use bootstrap mode for routine releases.
 
-No deployment success is implied by this document. Verify the deployed version, cron and runtime status after deployment. Cron changes can take time to propagate.
+The deployment status above records the verified release; deployment alone does not prove a completed reconciliation. Verify the deployed version, cron and runtime status after every release. Cron changes can take time to propagate.
 
 ## Credentials
 
@@ -68,9 +74,11 @@ $env:WORKER_ORIGIN = 'https://<deployment>.workers.dev'
 2password run --env 'MANUAL_TRIGGER_TOKEN=op://github-actions/<Manual item>/credential' -- bun scripts/operate.ts apply
 ```
 
-`POST /reconcile?dryRun=true` starts read-only planning (the default). `POST /reconcile?dryRun=false` starts apply when enabled. `GET /status` returns the latest run summary. All endpoints require the strong bearer credential over HTTPS. A 202 response means accepted, not completed. Inspect status until complete, then verify repository outcomes. Counters distinguish discovered, already configured, created, repaired, skipped, failed and manual actions.
+`POST /reconcile?dryRun=true` starts read-only planning (the default). `POST /reconcile?dryRun=false` starts apply when enabled. `GET /status` returns the latest run summary. All endpoints require the strong bearer credential over HTTPS. This deployment uses a dedicated Cloudflare Access application for the exact Worker hostname with a bypass policy, so machine requests reach the Worker's own 256-bit bearer authentication. The existing wildcard Access application and its shared policies remain unchanged. An unauthenticated request to the exact hostname was verified to return the Worker's JSON HTTP 401 response. A 202 response means accepted, not completed. Inspect status until complete, then verify repository outcomes. Counters distinguish discovered, already configured, created, repaired, skipped, failed and manual actions.
 
 Existing hooks are inspected before creation and only exact configured native endpoint matches are managed. Repairs retain the signing secret. Push-only, JSON, active hooks with SSL verification enabled are required. GitHub ping acceptance and delivery are separate from real push processing; only a real linked commit plus observed Linear behavior can prove end-to-end commit linking. Never claim that a successful ping proves push processing.
+
+If an existing wildcard Access application intercepts machine requests, first inspect the account's Access applications with the supported `cf` CLI. Create a separate application scoped only to the exact Worker hostname and attach an application-local bypass policy using the documented Cloudflare Access application and policy APIs. Preserve the wildcard application and shared policies. Verify that unauthenticated requests receive Worker HTTP 401 and authenticated dry-run requests receive HTTP 202. A bypass must never replace the Worker bearer check.
 
 ## Renewal and recovery
 

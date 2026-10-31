@@ -105,9 +105,9 @@ const main = async (): Promise<void> => {
 
 try {
   await main();
-} catch {
+} catch (error: unknown) {
   process.stderr.write(
-    "Secret provisioning failed; credential and provider details suppressed.\n"
+    `${JSON.stringify({ error: "provision-failed", kind: error instanceof Error ? error.name : "unknown" })}\n`
   );
   process.exitCode = 1;
 }
