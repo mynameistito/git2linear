@@ -11,7 +11,7 @@ if (process.env.BOOTSTRAP_MODE !== "true") {
 export default defineConfig({
   accountId: "402722ab1f598e783cd6dcdedc37e1d0",
   worker: {
-    compatibilityDate: "2026-11-01",
+    compatibilityDate: "2026-10-31",
     entrypoint: "src/index.ts",
     env: {
       APPLY_ENABLED: bindings.text(process.env.APPLY_ENABLED ?? "false"),
