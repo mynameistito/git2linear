@@ -1,4 +1,4 @@
-/* oxlint-disable sonarjs/max-union-size -- Safe diagnostic reasons are a fixed explicit allowlist. */
+/* oxlint-disable eslint/complexity, sonarjs/max-union-size -- Safe diagnostic reasons are a fixed explicit allowlist. */
 /** Sanitized provider failure; deliberately excludes raw responses and request URLs. */
 export interface ProviderFailure {
   readonly kind: "http" | "network" | "invalid-response";
@@ -7,6 +7,7 @@ export interface ProviderFailure {
   readonly reason?:
     | "illegal-invocation"
     | "timeout"
+    | "unsupported-redirect"
     | "invalid-header"
     | "other";
 }
@@ -38,7 +39,7 @@ export const request = async (
   try {
     const requestInit: RequestInit = {
       ...init,
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(15_000),
     };
 
@@ -93,8 +94,12 @@ export const request = async (
       ok: false,
     };
   } catch (error) {
-    let reason: "illegal-invocation" | "timeout" | "invalid-header" | "other" =
-      "other";
+    let reason:
+      | "illegal-invocation"
+      | "timeout"
+      | "unsupported-redirect"
+      | "invalid-header"
+      | "other" = "other";
 
     if (error instanceof Error) {
       if (error.message.includes("Illegal invocation")) {
@@ -103,6 +108,8 @@ export const request = async (
         reason = "timeout";
       } else if (error.message.toLowerCase().includes("header")) {
         reason = "invalid-header";
+      } else if (error.message.toLowerCase().includes("redirect")) {
+        reason = "unsupported-redirect";
       }
     }
 

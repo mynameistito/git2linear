@@ -233,3 +233,27 @@ test("default transport preserves the Workers global fetch receiver", async () =
     globalThis.fetch = original;
   }
 });
+
+test("Workers-compatible manual redirects fail closed without forwarding credentials", async () => {
+  let calls = 0;
+
+  const result = await request(
+    "https://api.example",
+    { headers: { Authorization: "secret-test" } },
+    {
+      fetch: async (_url, init) => {
+        calls += 1;
+        expect(init.redirect).toBe("manual");
+
+        return new Response(null, {
+          headers: { Location: "https://unrelated.example/private" },
+          status: 302,
+        });
+      },
+    }
+  );
+
+  expect(result).toEqual({ error: { kind: "http", status: 302 }, ok: false });
+  expect(calls).toBe(1);
+  expect(JSON.stringify(result)).not.toContain("private");
+});
