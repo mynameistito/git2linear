@@ -48,6 +48,7 @@ export interface RepositoryStatus {
 }
 
 interface Checkpoint {
+  providerFailure?: ProviderFailure;
   phase: "repositories" | "projects" | "reconcile";
   page: number;
   cursor: string | null;
@@ -179,6 +180,23 @@ export class ReconciliationRunner implements StepRunner {
     state: Checkpoint,
     failure: ProviderFailure
   ): Promise<StepOutput> {
+    // Explicit projection: never persist a vendor exception, response, or request.
+    state.providerFailure = { kind: failure.kind };
+
+    if (failure.status !== undefined) {
+      state.providerFailure = {
+        ...state.providerFailure,
+        status: failure.status,
+      };
+    }
+
+    if (failure.retryAt !== undefined) {
+      state.providerFailure = {
+        ...state.providerFailure,
+        retryAt: failure.retryAt,
+      };
+    }
+
     state.attempts += 1;
 
     if (state.attempts >= 4 || failure.retryAt === undefined) {

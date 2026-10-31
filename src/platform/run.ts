@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-runtime-typeof -- Diagnostic parser validates persisted boundary scalars. */
 /** Secret-free status counters accumulated by the application runner. */
 export interface RunSummary {
   discovered: number;
@@ -152,3 +153,85 @@ export class RunCoordinator {
     }
   }
 }
+
+/** Validated secret-free continuation fields. */
+export interface CheckpointDiagnostics {
+  phase?: string;
+  attempts?: number;
+  providerFailure?: { kind: string; status?: number; retryAt?: number };
+}
+
+/* oxlint-disable eslint/complexity, sonarjs/expression-complexity, anti-slop/no-unknown-parameters -- Boundary parser deliberately verifies each diagnostic scalar and discards everything else. */
+/** Parse only operational diagnostics from a private checkpoint.
+ * @param checkpoint - Persisted internal checkpoint, never echoed.
+ * @returns Validated safe scalar diagnostic fields.
+ */
+export const checkpointDiagnostics = (
+  checkpoint: unknown
+): CheckpointDiagnostics => {
+  const safe: CheckpointDiagnostics = {};
+
+  if (typeof checkpoint !== "object" || checkpoint === null) {
+    return safe;
+  }
+
+  if (
+    "phase" in checkpoint &&
+    (checkpoint.phase === "repositories" ||
+      checkpoint.phase === "projects" ||
+      checkpoint.phase === "reconcile")
+  ) {
+    safe.phase = checkpoint.phase;
+  }
+
+  if (
+    "attempts" in checkpoint &&
+    typeof checkpoint.attempts === "number" &&
+    Number.isSafeInteger(checkpoint.attempts) &&
+    checkpoint.attempts >= 0
+  ) {
+    safe.attempts = checkpoint.attempts;
+  }
+
+  if (
+    !("providerFailure" in checkpoint) ||
+    typeof checkpoint.providerFailure !== "object" ||
+    checkpoint.providerFailure === null
+  ) {
+    return safe;
+  }
+
+  const failure = checkpoint.providerFailure;
+
+  if (
+    !("kind" in failure) ||
+    (failure.kind !== "http" &&
+      failure.kind !== "network" &&
+      failure.kind !== "invalid-response")
+  ) {
+    return safe;
+  }
+
+  safe.providerFailure = { kind: failure.kind };
+
+  if (
+    "status" in failure &&
+    typeof failure.status === "number" &&
+    Number.isInteger(failure.status) &&
+    failure.status >= 100 &&
+    failure.status <= 599
+  ) {
+    safe.providerFailure.status = failure.status;
+  }
+
+  if (
+    "retryAt" in failure &&
+    typeof failure.retryAt === "number" &&
+    Number.isSafeInteger(failure.retryAt) &&
+    failure.retryAt >= 0
+  ) {
+    safe.providerFailure.retryAt = failure.retryAt;
+  }
+
+  return safe;
+};

@@ -2,7 +2,11 @@
 import { expect, test } from "bun:test";
 
 import { authorized, scheduledReady } from "../../src/platform/auth";
-import { RunCoordinator, emptySummary } from "../../src/platform/run";
+import {
+  RunCoordinator,
+  emptySummary,
+  checkpointDiagnostics,
+} from "../../src/platform/run";
 import type { RunRecord, RunStore, StepRunner } from "../../src/platform/run";
 
 const memory = () => {
@@ -118,4 +122,31 @@ test("bootstrap cannot schedule work until every core credential is present", ()
   expect(scheduledReady({ ...complete, LINEAR_API_KEY: "" })).toBe(false);
   expect(scheduledReady({ ...complete, MANUAL_TRIGGER_TOKEN: "" })).toBe(false);
   expect(scheduledReady(complete)).toBe(true);
+});
+
+test("diagnostics expose only validated scalar fields and discard nested secret payloads", () => {
+  expect(
+    checkpointDiagnostics({
+      attempts: 1,
+      phase: "repositories",
+      providerFailure: {
+        kind: "http",
+        retryAt: 1000,
+        secret: "hidden",
+        status: 429,
+      },
+      token: "hidden",
+    })
+  ).toEqual({
+    attempts: 1,
+    phase: "repositories",
+    providerFailure: { kind: "http", retryAt: 1000, status: 429 },
+  });
+  expect(
+    checkpointDiagnostics({
+      attempts: "hidden",
+      phase: "hidden",
+      providerFailure: { kind: "hidden", status: 999 },
+    })
+  ).toEqual({});
 });
