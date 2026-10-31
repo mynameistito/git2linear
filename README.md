@@ -4,9 +4,13 @@ A modular TypeScript Cloudflare Worker reconciles repositories owned by `mynamei
 
 ## Deployment status
 
-The Worker is deployed at https://git2linear.mynameistito.workers.dev with hourly cron `0 * * * *` and `APPLY_ENABLED=false`. Version `06fce59a-c2de-42d9-9aed-27ce545fe4eb` was deployed on 2026-11-01 (Auckland). The three core runtime secrets were provisioned successfully. Native commit-webhook credentials remain absent; no placeholder endpoint or exposed signing secret was provisioned.
+The Worker is deployed at https://git2linear.mynameistito.workers.dev with hourly cron `0 * * * *` and `APPLY_ENABLED=true`. Three core runtime secrets were provisioned successfully. Native commit-webhook credentials remain absent; no placeholder endpoint or exposed signing secret was provisioned.
 
-An authenticated local dry run discovered 203 owned repositories and 202 existing Linear projects: one project creation, 121 repository-resource attachments, 81 archived repositories skipped, zero failures, and 122 repositories requiring manual native integration action. These are planned changes, not evidence of applied mutations. The authenticated remote dry run completed successfully with the same counts and 203 persisted repository reports. Version `1d496203-a198-46cb-a3fd-eb7108b8cffb` completed this verification. First apply and final provider state verification remain pending.
+The completed authenticated dry run preceded the first apply. That apply discovered 203 owned repositories, created one Linear project, repaired 121 repository-resource attachments, skipped 81 archived repositories, and recorded zero failures. All 122 eligible repositories still require manual native integration action. Reports identify repositories by stable GitHub ID.
+
+Independent authenticated pagination verified 203 GitHub repositories and 203 Linear projects. Every eligible repository has exactly one matching MY project with its current name and GitHub resource link; all 202 original project UUIDs remain present. No ambiguous matches or missing links were found. The 81 archived repositories remain excluded. Native sync mappings, default issue repository, commit-webhook delivery and real push processing are not proved by this project verification.
+
+The second apply completed with 203 discovered, 122 already configured, zero creations, zero repairs, 81 archived skips, zero failures, and 122 manual native integration actions. All 203 repository reports were retrieved. Deployed code `168000f` is version `3ee5520c-6c77-467c-8b64-812ea19e74ee`; the hourly schedule was verified through Cloudflare API. Bounded report cleanup completed with no remaining alarm. Native commit hooks remain unconfigured by this deployment because replacement credentials are unavailable; no native hook or real push success is claimed.
 
 ## Current integration limitation
 
