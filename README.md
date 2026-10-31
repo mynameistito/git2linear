@@ -32,6 +32,8 @@ bun run deploy:check
 bun run deploy
 ```
 
+For the first deployment only, set `$env:BOOTSTRAP_MODE = 'true'` and run `bun run deploy` to create the Worker without required secret declarations. Bootstrap rejects unauthenticated requests and skips scheduled work while core credentials are absent. Inject the three required secrets with the provisioning script below, run `Remove-Item Env:BOOTSTRAP_MODE`, then run `bun run deploy` again with `APPLY_ENABLED=false`. Obtain and review a completed remote dry run before enabling apply. Never use bootstrap mode for routine releases.
+
 No deployment success is implied by this document. Verify the deployed version, cron and runtime status after deployment. Cron changes can take time to propagate.
 
 ## Credentials

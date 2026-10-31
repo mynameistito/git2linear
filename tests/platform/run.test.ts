@@ -112,6 +112,7 @@ test("bootstrap cannot schedule work until every core credential is present", ()
     LINEAR_API_KEY: "linear",
     MANUAL_TRIGGER_TOKEN: "x".repeat(43),
   };
+
   expect(scheduledReady({})).toBe(false);
   expect(scheduledReady({ ...complete, GITHUB_TOKEN: "" })).toBe(false);
   expect(scheduledReady({ ...complete, LINEAR_API_KEY: "" })).toBe(false);
