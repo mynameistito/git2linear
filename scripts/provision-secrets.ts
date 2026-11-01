@@ -99,6 +99,7 @@ const provision = Effect.fn("Secrets.provision")(function* provision() {
       );
 
       const body = yield* readJsonEffect(response);
+
       const result = yield* Schema.decodeUnknownEffect(responseSchema)(
         body
       ).pipe(
