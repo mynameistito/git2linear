@@ -1,5 +1,5 @@
 /* oxlint-disable eslint/require-await, unicorn/no-await-expression-member, vitest/prefer-importing-vitest-globals -- Bun async storage fixtures. */
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import { authorized, scheduledReady } from "../../src/platform/auth";
 import {

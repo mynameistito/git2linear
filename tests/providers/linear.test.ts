@@ -1,6 +1,6 @@
 /* oxlint-disable eslint/require-await, anti-slop/no-unsafe-dictionary-type -- Fixture transport captures arbitrary protocol variable values. */
 /* oxlint-disable vitest/prefer-importing-vitest-globals -- Bun provides the actual test runtime. */
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import type { HttpOptions } from "../../src/providers/http.ts";
 import { LinearProjects } from "../../src/providers/linear.ts";

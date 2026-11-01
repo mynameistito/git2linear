@@ -1,6 +1,6 @@
 /* oxlint-disable vitest/prefer-importing-vitest-globals -- Bun is the actual test runtime. */
 /* oxlint-disable eslint/require-await, eslint/no-await-in-loop -- Deterministic storage fixture and sequential durable maintenance batches. */
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import { pruneReportBatch } from "../../src/platform/retention";
 import type { ReportRetentionStore } from "../../src/platform/retention";

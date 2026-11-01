@@ -2,7 +2,7 @@
 /* oxlint-disable vitest/prefer-importing-vitest-globals -- Bun is the actual test runtime. */
 /* oxlint-disable eslint/require-await, eslint/no-nested-ternary, sonarjs/no-nested-conditional -- Deterministic async provider fixture responses mirror the transport contract. */
 /* oxlint-disable anti-slop/no-runtime-typeof -- Parsing serialized request body at the fake transport boundary. */
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import { GitHubClient } from "../../src/providers/github";
 import { request } from "../../src/providers/http";

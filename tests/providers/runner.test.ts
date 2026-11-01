@@ -1,5 +1,5 @@
 /* oxlint-disable sonarjs/no-undefined-assignment -- Tests explicitly remove an optional capability from a shared fixture. */
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import { ReconciliationRunner } from "../../src/application/runner";
 import type {

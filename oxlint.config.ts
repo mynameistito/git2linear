@@ -9,13 +9,6 @@ const jsPlugins = selectJsPlugins(["github", "jsdoc-js", "sonarjs", "tsdoc"]);
 export default defineConfig({
   env: core.env,
   extends: [core, vitest, antiSlop, jsPlugins],
-  ignorePatterns: core.ignorePatterns,
   jsPlugins: jsPlugins.jsPlugins,
   options: { typeAware: true },
-  overrides: [
-    {
-      files: ["tests/**/*.test.ts"],
-      rules: { "vitest/prefer-importing-vitest-globals": "off" },
-    },
-  ],
 });
