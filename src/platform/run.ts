@@ -1,13 +1,4 @@
-import {
-  Context,
-  Duration,
-  Effect,
-  flow,
-  Layer,
-  Option,
-  Schedule,
-  Schema,
-} from "effect";
+import { Duration, Effect, flow, Option, Schedule, Schema } from "effect";
 
 import { PersistenceError } from "../application/persistence-error";
 
@@ -74,7 +65,7 @@ export interface RunStore {
   schedule: (at: number) => Promise<void>;
 }
 
-export const RunRecordSchema = Schema.Struct({
+const RunRecordSchema = Schema.Struct({
   checkpoint: Schema.Unknown,
   dryRun: Schema.Boolean,
   failures: Schema.Number,
@@ -102,10 +93,6 @@ export interface RunPersistence {
   start: (record: RunRecord) => Effect.Effect<RunRecord, PersistenceError>;
   schedule: (at: number) => Effect.Effect<void, PersistenceError>;
 }
-
-export const RunPersistenceService = Context.Service<RunPersistence>(
-  "git2linear/RunPersistence"
-);
 
 const storageEffect = <T>(operation: string, run: () => Promise<T>) =>
   Effect.tryPromise({
@@ -147,13 +134,6 @@ export const nativeRunPersistence = (store: RunStore): RunPersistence => ({
       Effect.flatMap(decodeRunRecord)
     ),
 });
-
-/** Create a persistence service layer.
- * @param store - Promise-based run storage.
- * @returns A layer providing run persistence.
- */
-export const persistenceLayer = (store: RunStore) =>
-  Layer.succeed(RunPersistenceService, nativeRunPersistence(store));
 
 /** Platform service boundary. */
 export interface NativeStepRunner {

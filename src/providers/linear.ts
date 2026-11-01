@@ -1,5 +1,5 @@
 /** Schema source: https://github.com/linear/linear/blob/master/packages/sdk/src/schema.graphql */
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import type { Project } from "../domain/reconciliation.ts";
 import {
@@ -13,7 +13,6 @@ import {
   AttachResponse,
   CreateResponse,
   ProjectsResponse,
-  LinearService,
   TeamResponse,
   UpdateResponse,
 } from "./linear-schema.ts";
@@ -60,8 +59,6 @@ export interface LinearOperations {
   ) => Effect.Effect<boolean, ProviderError>;
 }
 
-export { LinearService } from "./linear-schema.ts";
-
 type Variables =
   | { readonly after: string | null }
   | { readonly id: string }
@@ -84,7 +81,7 @@ const invalid = () => new ProviderError({ kind: "invalid-response" });
  * @param options - Optional transport.
  * @returns Native operations.
  */
-export const makeLinearOperations = (
+const makeLinearOperations = (
   authorization: string,
   options: HttpOptions = {}
 ): LinearOperations => {
@@ -207,19 +204,6 @@ export const makeLinearOperations = (
 
   return { attach, create, page, rename, verifyTeam };
 };
-
-/** Construct a layer providing the native Linear adapter.
- * @param authorization - Authorization header.
- * @param options - Optional transport.
- * @returns Provider layer.
- */
-export const linearLayer = (authorization: string, options: HttpOptions = {}) =>
-  Layer.effect(
-    LinearService,
-    Effect.sync(() =>
-      LinearService.of(makeLinearOperations(authorization, options))
-    )
-  );
 
 const decodeFailure = Schema.decodeUnknownSync(ProviderFailureSchema);
 

@@ -35,7 +35,7 @@ export type Identity = typeof IdentitySchema.Type;
 
 const identityConflict = "identity-conflict";
 
-export const ProjectPlanSchema = Schema.Union([
+const ProjectPlanSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("skip"),
     reason: Schema.Literals(["foreign-owner", "archived", "disabled"]),
@@ -65,7 +65,7 @@ export const ProjectPlanSchema = Schema.Union([
 /** ProjectPlan domain model. */
 export type ProjectPlan = typeof ProjectPlanSchema.Type;
 
-export const ProjectEvidenceSchema = Schema.Struct({
+const ProjectEvidenceSchema = Schema.Struct({
   identities: Schema.Array(IdentitySchema),
   owner: Schema.String,
   projects: Schema.Array(ProjectSchema),
@@ -188,7 +188,7 @@ export const planProject = (evidence: ProjectEvidence): ProjectPlan => {
   };
 };
 
-export const RepositoryHookSchema = Schema.Struct({
+const RepositoryHookSchema = Schema.Struct({
   active: Schema.Boolean,
   contentType: Schema.String,
   endpoint: Schema.String,
@@ -200,7 +200,7 @@ export const RepositoryHookSchema = Schema.Struct({
 /** RepositoryHook domain model. */
 export type RepositoryHook = typeof RepositoryHookSchema.Type;
 
-export const HookPlanSchema = Schema.Union([
+const HookPlanSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("create") }),
   Schema.Struct({ hookId: Schema.Number, kind: Schema.Literal("reuse") }),
   Schema.Struct({ hookId: Schema.Number, kind: Schema.Literal("repair") }),

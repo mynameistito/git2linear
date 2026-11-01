@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 
 import type { Repository, RepositoryHook } from "../domain/reconciliation";
 import {
@@ -60,7 +60,7 @@ interface Port {
 }
 
 /** Injectable native GitHub provider port. */
-export const GitHubService = Context.Service<Port>("git2linear/GitHub");
+const GitHubService = Context.Service<Port>("git2linear/GitHub");
 
 const invalid = () => new ProviderError({ kind: "invalid-response" });
 
@@ -319,13 +319,6 @@ const makeGitHub = (options: GitHubOptions): Port => {
     repairHook,
   });
 };
-
-/** Construct a layer for the native GitHub port.
- * @param options - Provider configuration.
- * @returns The provider layer.
- */
-export const githubLayer = (options: GitHubOptions) =>
-  Layer.succeed(GitHubService, makeGitHub(options));
 
 const decodeFailure = Schema.decodeUnknownSync(ProviderFailureSchema);
 

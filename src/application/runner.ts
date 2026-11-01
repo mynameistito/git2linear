@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import type {
   HookPlan,
@@ -19,7 +19,6 @@ import type {
 import { GitHubClient } from "../providers/github";
 import type { ProviderFailure } from "../providers/http";
 import { LinearProjects } from "../providers/linear";
-import type { PersistenceError } from "./persistence-error";
 import {
   adaptLegacy,
   CheckpointSchema,
@@ -28,16 +27,6 @@ import {
   ReconciliationError,
 } from "./runner-adapters";
 import type { NativeOptions } from "./runner-adapters";
-
-export {
-  nativePersistenceService,
-  PersistenceService,
-  persistenceLayer,
-} from "./runner-adapters";
-
-export { PersistenceError } from "./persistence-error";
-
-export { ReconciliationError } from "./reconciliation-error";
 
 /** Storage survives runs; identity and intent writes precede provider mutation. */
 export interface ReconciliationStore {
@@ -746,24 +735,3 @@ export const createRunner = (
     )
   );
 };
-
-/** Native reconciliation contract. */
-export interface ReconciliationOperations {
-  readonly stepEffect: (
-    input: StepInput
-  ) => Effect.Effect<StepOutput, ReconciliationError | PersistenceError>;
-}
-
-export const ReconciliationService = Context.Service<ReconciliationOperations>(
-  "git2linear/Reconciliation"
-);
-
-/** Provide the reconciliation contract.
- * @param runner - Native runner.
- * @returns Its service layer.
- */
-export const reconciliationLayer = (runner: ReconciliationRunner) =>
-  Layer.effect(
-    ReconciliationService,
-    Effect.succeed(ReconciliationService.of({ stepEffect: runner.stepEffect }))
-  );

@@ -1,12 +1,4 @@
-import { Context, Schema } from "effect";
-
-import type { LinearOperations } from "./linear.ts";
-
-/** Injectable Linear operations. */
-export class LinearService extends Context.Service<
-  LinearService,
-  LinearOperations
->()("git2linear/LinearService") {}
+import { Schema } from "effect";
 
 const complete = Schema.Struct({ hasNextPage: Schema.Literal(false) });
 

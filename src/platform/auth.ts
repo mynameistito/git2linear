@@ -4,7 +4,7 @@ const taggedFailure = Schema.TaggedError;
 const algorithm = "HMAC";
 
 /** Cryptographic platform failure without credential-bearing details. */
-export class AuthenticationError extends taggedFailure<AuthenticationError>()(
+class AuthenticationError extends taggedFailure<AuthenticationError>()(
   "AuthenticationError",
   {}
 ) {}

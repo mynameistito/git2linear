@@ -241,12 +241,3 @@ export const request = async (
   options: HttpOptions
 ): Promise<ProviderResult<Response>> =>
   await legacyResult(requestEffect(url, init, options));
-
-/** Promise boundary for existing JSON consumers.
- * @param response - Provider response.
- * @returns Sanitized compatibility result.
- */
-export const readJson = async (
-  response: Response
-): Promise<ProviderResult<unknown>> =>
-  await legacyResult(readJsonEffect(response));

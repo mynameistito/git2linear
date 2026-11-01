@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import {
   IdentitySchema,
@@ -90,10 +90,6 @@ export interface NativeOptions {
   endpoint?: string;
 }
 
-export const PersistenceService = Context.Service<NativeStore>(
-  "git2linear/Persistence"
-);
-
 const promise = <T>(operation: string, run: () => Promise<T>) =>
   Effect.tryPromise({
     catch: () => new PersistenceError({ operation }),
@@ -104,7 +100,7 @@ const promise = <T>(operation: string, run: () => Promise<T>) =>
  * @param store - Promise based store.
  * @returns Native store.
  */
-export const legacyStore = (store: ReconciliationStore): NativeStore => ({
+const legacyStore = (store: ReconciliationStore): NativeStore => ({
   identities: () => promise("identities", store.identities),
   intent: (id, kind) =>
     promise("intent", async () => await store.intent(id, kind)),
@@ -301,13 +297,3 @@ export const nativePersistenceService = (
     }
   ),
 });
-
-/** Provide durable storage operations.
- * @param storage - Durable storage.
- * @returns Persistence layer.
- */
-export const persistenceLayer = (storage: DurableObjectStorage) =>
-  Layer.effect(
-    PersistenceService,
-    Effect.sync(() => PersistenceService.of(nativePersistenceService(storage)))
-  );
