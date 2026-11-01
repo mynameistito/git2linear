@@ -37,10 +37,42 @@ describe("Alchemy deployment configuration", () => {
       ...base,
       ALCHEMY_CONFIRMED_BINDINGS: "core+webhook",
       LINEAR_WEBHOOK_SECRET: "synthetic-secret",
-      LINEAR_WEBHOOK_URL: "synthetic-url",
+      LINEAR_WEBHOOK_URL: "https://api.linear.app/hooks/test?token=synthetic",
     });
 
     expect(result._tag).toBe("Success");
+  });
+
+  it.each(["linear.app", "client-api.linear.app"])(
+    "accepts supported host %s",
+    async (host) => {
+      const result = await load({
+        ...base,
+        ALCHEMY_CONFIRMED_BINDINGS: "core+webhook",
+        LINEAR_WEBHOOK_SECRET: "synthetic-secret",
+        LINEAR_WEBHOOK_URL: `https://${host}/hooks/test`,
+      });
+
+      expect(result._tag).toBe("Success");
+    }
+  );
+
+  it.each([
+    ["http:", "//linear.app/hook"].join(""),
+    "https://evil.linear.app/hook",
+    "https://linear.app.evil.test/hook",
+    "https://user@linear.app/hook",
+    "https://linear.app/hook#fragment",
+    "invalid",
+  ])("rejects unsafe webhook URL %#", async (url) => {
+    const result = await load({
+      ...base,
+      ALCHEMY_CONFIRMED_BINDINGS: "core+webhook",
+      LINEAR_WEBHOOK_SECRET: "synthetic",
+      LINEAR_WEBHOOK_URL: url,
+    });
+
+    expect(result._tag).toBe("Failure");
   });
 
   it.each([
@@ -53,6 +85,14 @@ describe("Alchemy deployment configuration", () => {
     { MANUAL_TRIGGER_TOKEN: "too-short" },
     { LINEAR_WEBHOOK_URL: "synthetic-url" },
     { ALCHEMY_CONFIRMED_BINDINGS: "core+webhook" },
+    {
+      ALCHEMY_CONFIRMED_BINDINGS: "core+webhook",
+      LINEAR_WEBHOOK_SECRET: "synthetic",
+    },
+    {
+      ALCHEMY_CONFIRMED_BINDINGS: "core+webhook",
+      LINEAR_WEBHOOK_URL: "https://linear.app/hooks/test",
+    },
     {
       LINEAR_WEBHOOK_SECRET: "synthetic-secret",
       LINEAR_WEBHOOK_URL: "synthetic-url",

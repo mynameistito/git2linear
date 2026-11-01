@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { preflight } from "../alchemy/preflight";
 
 await Effect.runPromise(
-  preflight().pipe(
+  preflight({}, process.argv.includes("--final")).pipe(
     Effect.match({
       onFailure: () => {
         process.stderr.write('{"status":"failed"}\n');

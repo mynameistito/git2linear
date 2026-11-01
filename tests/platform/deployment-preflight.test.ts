@@ -40,13 +40,77 @@ const settings = (items: unknown[]) => ({
 
 const check = async (
   items: unknown[],
-  cron: typeof Schedules.Type = Schema.decodeUnknownSync(Schedules)(schedules)
+  cron: typeof Schedules.Type = Schema.decodeUnknownSync(Schedules)(schedules),
+  mode: "absent" | "transition" | "required" = "absent"
 ) =>
   await Effect.runPromiseExit(
-    validateInventory(Schema.decodeUnknownSync(Settings)(settings(items)), cron)
+    validateInventory(
+      Schema.decodeUnknownSync(Settings)(settings(items)),
+      cron,
+      mode
+    )
   );
 
 describe("deployment preflight", () => {
+  const pair = [
+    { name: "LINEAR_WEBHOOK_URL", type: "secret_text" },
+    { name: "LINEAR_WEBHOOK_SECRET", type: "secret_text" },
+  ];
+
+  it.each([
+    { expected: "Success", items: bindings, mode: "transition" as const },
+    {
+      expected: "Success",
+      items: [...bindings, ...pair],
+      mode: "transition" as const,
+    },
+    {
+      expected: "Success",
+      items: [...bindings, ...pair],
+      mode: "required" as const,
+    },
+    { expected: "Failure", items: bindings, mode: "required" as const },
+    {
+      expected: "Failure",
+      items: [...bindings, pair[0]],
+      mode: "transition" as const,
+    },
+    {
+      expected: "Failure",
+      items: [
+        ...bindings,
+        pair[0],
+        { name: "LINEAR_WEBHOOK_SECRET", type: "plain_text" },
+      ],
+      mode: "required" as const,
+    },
+    {
+      expected: "Failure",
+      items: [...bindings, ...pair],
+      mode: "absent" as const,
+    },
+    {
+      expected: "Failure",
+      items: [
+        ...bindings.map((binding) =>
+          binding.name === "RECONCILER"
+            ? { ...binding, namespace_id: "wrong" }
+            : binding
+        ),
+        ...pair,
+      ],
+      mode: "required" as const,
+    },
+  ])("checks webhook inventory case %#", async ({ items, mode, expected }) => {
+    const result = await check(
+      items,
+      Schema.decodeUnknownSync(Schedules)(schedules),
+      mode
+    );
+
+    expect(result._tag).toBe(expected);
+  });
+
   it("accepts the exact production metadata", async () => {
     const result = await check(bindings);
     expect(result._tag).toBe("Success");

@@ -29,6 +29,8 @@ jobs:
           CLOUDFLARE_DEPLOY_API_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/CLOUDFLARE_DEPLOY_API_TOKEN
           APP_GITHUB_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/GITHUB_TOKEN
           APP_LINEAR_API_KEY: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_API_KEY
+          APP_LINEAR_WEBHOOK_URL: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_WEBHOOK_URL
+          APP_LINEAR_WEBHOOK_SECRET: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_WEBHOOK_SECRET
           APP_MANUAL_TRIGGER_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/MANUAL_TRIGGER_TOKEN
       - name: Deploy the exact CI commit
         uses: mynameistito/alchemy-deploy@382135917559d72946e7c67a0752eaf4c12c785f
@@ -38,22 +40,24 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ steps.secrets.outputs.CLOUDFLARE_DEPLOY_API_TOKEN }}
           APP_GITHUB_TOKEN: ${{ steps.secrets.outputs.APP_GITHUB_TOKEN }}
           APP_LINEAR_API_KEY: ${{ steps.secrets.outputs.APP_LINEAR_API_KEY }}
+          APP_LINEAR_WEBHOOK_URL: ${{ steps.secrets.outputs.APP_LINEAR_WEBHOOK_URL }}
+          APP_LINEAR_WEBHOOK_SECRET: ${{ steps.secrets.outputs.APP_LINEAR_WEBHOOK_SECRET }}
           APP_MANUAL_TRIGGER_TOKEN: ${{ steps.secrets.outputs.APP_MANUAL_TRIGGER_TOKEN }}
           LINEAR_TEAM_ID: 00091889-0699-4cd5-8e23-ef401294956f
           APPLY_ENABLED: "true"
-          ALCHEMY_CONFIRMED_BINDINGS: core
+          ALCHEMY_CONFIRMED_BINDINGS: core+webhook
           WORKER_ORIGIN: https://git2linear.mynameistito.workers.dev
         with:
           worker-name: git2linear
           production-stage: production
           production-branch: main
           production-url: https://git2linear.mynameistito.workers.dev
-          install-command: env -u APP_GITHUB_TOKEN -u APP_LINEAR_API_KEY -u APP_MANUAL_TRIGGER_TOKEN bun install --frozen-lockfile
+          install-command: env -u APP_GITHUB_TOKEN -u APP_LINEAR_API_KEY -u APP_MANUAL_TRIGGER_TOKEN -u APP_LINEAR_WEBHOOK_URL -u APP_LINEAR_WEBHOOK_SECRET bun install --frozen-lockfile
           destroy-command: "false"
           deploy-command: |
             test "$STAGE" = production
-            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:alchemy:preflight
-            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:alchemy:plan
-            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:alchemy:deploy --yes
-            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:alchemy:preflight
+            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" LINEAR_WEBHOOK_URL="$APP_LINEAR_WEBHOOK_URL" LINEAR_WEBHOOK_SECRET="$APP_LINEAR_WEBHOOK_SECRET" bun run varlock:alchemy:preflight
+            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" LINEAR_WEBHOOK_URL="$APP_LINEAR_WEBHOOK_URL" LINEAR_WEBHOOK_SECRET="$APP_LINEAR_WEBHOOK_SECRET" bun run varlock:alchemy:plan
+            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" LINEAR_WEBHOOK_URL="$APP_LINEAR_WEBHOOK_URL" LINEAR_WEBHOOK_SECRET="$APP_LINEAR_WEBHOOK_SECRET" bun run varlock:alchemy:deploy --yes
+            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" LINEAR_WEBHOOK_URL="$APP_LINEAR_WEBHOOK_URL" LINEAR_WEBHOOK_SECRET="$APP_LINEAR_WEBHOOK_SECRET" bun run varlock:alchemy:preflight --final
             MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:operate status

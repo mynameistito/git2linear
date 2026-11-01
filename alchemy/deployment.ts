@@ -37,6 +37,28 @@ export const deploymentConfig = Effect.gen(function* readDeploymentConfig() {
 
   const webhookUrl = yield* Config.option(nonBlankSecret("LINEAR_WEBHOOK_URL"));
 
+  if (Option.isSome(webhookUrl)) {
+    const value = Redacted.value(webhookUrl.value);
+
+    yield* Schema.decodeUnknownEffect(Schema.Literal(true))(
+      URL.canParse(value)
+    ).pipe(Effect.mapError((error) => new Config.ConfigError(error)));
+
+    const address = new URL(value);
+
+    const hasCredentialsOrFragment = Boolean(
+      address.username || address.password || address.hash
+    );
+
+    yield* Schema.decodeUnknownEffect(Schema.Literal(true))(
+      address.protocol === "https:" &&
+        ["api.linear.app", "client-api.linear.app", "linear.app"].includes(
+          address.hostname
+        ) &&
+        !hasCredentialsOrFragment
+    ).pipe(Effect.mapError((error) => new Config.ConfigError(error)));
+  }
+
   const webhookSecret = yield* Config.option(
     nonBlankSecret("LINEAR_WEBHOOK_SECRET")
   );

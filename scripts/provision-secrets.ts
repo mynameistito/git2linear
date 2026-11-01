@@ -64,7 +64,9 @@ const provision = Effect.fn("Secrets.provision")(function* provision() {
 
     if (
       address.protocol !== "https:" ||
-      !["api.linear.app", "linear.app"].includes(address.hostname) ||
+      !["api.linear.app", "client-api.linear.app", "linear.app"].includes(
+        address.hostname
+      ) ||
       invalidAddress ||
       !Redacted.value(webhookSecret.value)
     ) {
