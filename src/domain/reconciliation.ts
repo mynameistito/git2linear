@@ -1,66 +1,80 @@
-/* oxlint-disable sonarjs/max-union-size -- Explicit actionable failure variants preserve exhaustive handling. */
-/** Repository inventory parsed by the GitHub boundary. */
-export interface Repository {
-  readonly id: number;
-  readonly owner: string;
-  readonly name: string;
-  readonly url: string;
-  readonly archived: boolean;
-  readonly disabled: boolean;
-}
+import { Schema } from "effect";
 
-/** Existing Linear project with its repository attachment URLs. */
-export interface Project {
-  readonly summary?: string;
-  readonly id: string;
-  readonly name: string;
-  readonly urls: readonly string[];
-  readonly teamIds: readonly string[];
-  readonly archived: boolean;
-}
+export const RepositorySchema = Schema.Struct({
+  archived: Schema.Boolean,
+  disabled: Schema.Boolean,
+  id: Schema.Number,
+  name: Schema.String,
+  owner: Schema.String,
+  url: Schema.String,
+});
 
-/** Durable identity retained across repository renames and partial runs. */
-export interface Identity {
-  readonly repositoryId: number;
-  readonly projectId: string;
-  readonly repositoryUrl: string;
-}
+/** Repository domain model. */
+export type Repository = typeof RepositorySchema.Type;
 
-/** Safe project decision; manual outcomes forbid automatic creation. */
-export type ProjectPlan =
-  | {
-      readonly kind: "skip";
-      readonly reason: "foreign-owner" | "archived" | "disabled";
-    }
-  | {
-      readonly kind: "manual";
-      // oxlint-disable-next-line sonarjs/max-union-size -- Distinct manual outcomes are actionable operational states.
-      readonly reason:
-        | "ambiguous-project"
-        | "missing-mapped-project"
-        | "archived-project"
-        | "identity-conflict";
-    }
-  | {
-      readonly kind: "create";
-      readonly name: string;
-      readonly repositoryUrl: string;
-    }
-  | {
-      readonly kind: "reuse";
-      readonly projectId: string;
-      readonly updateName: string | null;
-      readonly attachUrl: string | null;
-    };
+export const ProjectSchema = Schema.Struct({
+  archived: Schema.Boolean,
+  id: Schema.String,
+  name: Schema.String,
+  summary: Schema.optionalKey(Schema.String),
+  teamIds: Schema.Array(Schema.String),
+  urls: Schema.Array(Schema.String),
+});
 
-/** All evidence needed for a deterministic project decision. */
-export interface ProjectEvidence {
-  readonly repository: Repository;
-  readonly owner: string;
-  readonly teamId: string;
-  readonly projects: readonly Project[];
-  readonly identities: readonly Identity[];
-}
+/** Project domain model. */
+export type Project = typeof ProjectSchema.Type;
+
+export const IdentitySchema = Schema.Struct({
+  projectId: Schema.String,
+  repositoryId: Schema.Number,
+  repositoryUrl: Schema.String,
+});
+
+/** Identity domain model. */
+export type Identity = typeof IdentitySchema.Type;
+
+const identityConflict = "identity-conflict";
+
+export const ProjectPlanSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("skip"),
+    reason: Schema.Literals(["foreign-owner", "archived", "disabled"]),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("manual"),
+    reason: Schema.Literals([
+      "ambiguous-project",
+      "missing-mapped-project",
+      "archived-project",
+      identityConflict,
+    ]),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("create"),
+    name: Schema.String,
+    repositoryUrl: Schema.String,
+  }),
+  Schema.Struct({
+    attachUrl: Schema.NullOr(Schema.String),
+    kind: Schema.Literal("reuse"),
+    projectId: Schema.String,
+    updateName: Schema.NullOr(Schema.String),
+  }),
+]);
+
+/** ProjectPlan domain model. */
+export type ProjectPlan = typeof ProjectPlanSchema.Type;
+
+export const ProjectEvidenceSchema = Schema.Struct({
+  identities: Schema.Array(IdentitySchema),
+  owner: Schema.String,
+  projects: Schema.Array(ProjectSchema),
+  repository: RepositorySchema,
+  teamId: Schema.String,
+});
+
+/** ProjectEvidence domain model. */
+export type ProjectEvidence = typeof ProjectEvidenceSchema.Type;
 
 const canonicalUrl = (url: string): string => {
   let normalized = url.toLowerCase();
@@ -109,7 +123,7 @@ export const planProject = (evidence: ProjectEvidence): ProjectPlan => {
   );
 
   if (new Set(saved.map((identity) => identity.projectId)).size > 1) {
-    return { kind: "manual", reason: "identity-conflict" };
+    return { kind: "manual", reason: identityConflict };
   }
 
   const [identity] = saved;
@@ -155,7 +169,7 @@ export const planProject = (evidence: ProjectEvidence): ProjectPlan => {
         entry.projectId === project.id && entry.repositoryId !== repository.id
     )
   ) {
-    return { kind: "manual", reason: "identity-conflict" };
+    return { kind: "manual", reason: identityConflict };
   }
 
   if (project.archived) {
@@ -174,22 +188,30 @@ export const planProject = (evidence: ProjectEvidence): ProjectPlan => {
   };
 };
 
-/** Existing hook projection; the endpoint must never enter reports or persisted plans. */
-export interface RepositoryHook {
-  readonly id: number;
-  readonly endpoint: string;
-  readonly active: boolean;
-  readonly events: readonly string[];
-  readonly contentType: string;
-  readonly insecureSsl: string;
-}
+export const RepositoryHookSchema = Schema.Struct({
+  active: Schema.Boolean,
+  contentType: Schema.String,
+  endpoint: Schema.String,
+  events: Schema.Array(Schema.String),
+  id: Schema.Number,
+  insecureSsl: Schema.String,
+});
 
-/** Hook actions contain no endpoint or secret. Repairs deliberately omit secret changes. */
-export type HookPlan =
-  | { readonly kind: "create" }
-  | { readonly kind: "reuse"; readonly hookId: number }
-  | { readonly kind: "repair"; readonly hookId: number }
-  | { readonly kind: "manual"; readonly reason: "duplicate-endpoint-hooks" };
+/** RepositoryHook domain model. */
+export type RepositoryHook = typeof RepositoryHookSchema.Type;
+
+export const HookPlanSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("create") }),
+  Schema.Struct({ hookId: Schema.Number, kind: Schema.Literal("reuse") }),
+  Schema.Struct({ hookId: Schema.Number, kind: Schema.Literal("repair") }),
+  Schema.Struct({
+    kind: Schema.Literal("manual"),
+    reason: Schema.Literal("duplicate-endpoint-hooks"),
+  }),
+]);
+
+/** HookPlan domain model. */
+export type HookPlan = typeof HookPlanSchema.Type;
 
 /** Manage only exact endpoint matches, leaving unrelated hooks untouched.
  * @param hooks - Discovered repository hooks.
