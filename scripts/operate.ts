@@ -1,40 +1,57 @@
-/* oxlint-disable eslint/complexity, sonarjs/expression-complexity -- Single operator boundary rejects malformed authentication and URLs before network IO. */
-/** Operator client accepts credentials only through the process environment. */
-const main = async (): Promise<void> => {
-  const origin = process.env.WORKER_ORIGIN;
-  const token = process.env.MANUAL_TRIGGER_TOKEN;
-  const action = process.argv[2] ?? "status";
+import { Config, Effect, Redacted, Schema } from "effect";
 
-  if (
-    (origin ?? "") === "" ||
-    (token ?? "") === "" ||
-    (token ?? "").length < 43 ||
-    !["status", "dry-run", "apply"].includes(action)
-  ) {
-    process.stderr.write(
-      "Required: WORKER_ORIGIN, strong MANUAL_TRIGGER_TOKEN and status|dry-run|apply.\n"
-    );
-    process.exitCode = 1;
+import { readJsonEffect, requestEffect } from "../src/providers/http";
 
-    return;
+const OperatorResponse = Schema.Struct({
+  dryRun: Schema.optionalKey(Schema.Boolean),
+  runId: Schema.optionalKey(Schema.String),
+  startedAt: Schema.optionalKey(Schema.Number),
+  status: Schema.optionalKey(Schema.String),
+  summary: Schema.optionalKey(
+    Schema.Struct({
+      alreadyConfigured: Schema.Number,
+      created: Schema.Number,
+      discovered: Schema.Number,
+      failed: Schema.Number,
+      manualActionRequired: Schema.Number,
+      repaired: Schema.Number,
+      skipped: Schema.Number,
+    })
+  ),
+  updatedAt: Schema.optionalKey(Schema.Number),
+});
+
+const Action = Schema.Literals(["status", "dry-run", "apply"]);
+const Token = Schema.String.check(Schema.isMinLength(43));
+const taggedFailure = Schema.TaggedError;
+
+class OperatorFailure extends taggedFailure<OperatorFailure>()(
+  "OperatorFailure",
+  {}
+) {}
+
+const operate = Effect.fn("Operator.operate")(function* operate(
+  actionInput: string
+) {
+  const origin = yield* Config.String("WORKER_ORIGIN");
+  const secret = yield* Config.Redacted("MANUAL_TRIGGER_TOKEN");
+
+  const action = yield* Schema.decodeUnknownEffect(Action)(actionInput);
+
+  const token = yield* Schema.decodeUnknownEffect(Token)(
+    Redacted.value(secret)
+  ).pipe(Effect.mapError(() => new OperatorFailure()));
+
+  const url = yield* Schema.decodeUnknownEffect(Schema.URLFromString)(
+    origin
+  ).pipe(Effect.mapError(() => new OperatorFailure()));
+
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") {
+    return yield* Effect.fail(new OperatorFailure());
   }
 
-  const url = new URL(origin ?? "");
-
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname !== "/"
-  ) {
-    process.stderr.write(
-      "WORKER_ORIGIN must be an HTTPS origin without credentials or query.\n"
-    );
-    process.exitCode = 1;
-
-    return;
+  if (url.search !== "" || url.hash !== "" || url.pathname !== "/") {
+    return yield* Effect.fail(new OperatorFailure());
   }
 
   url.pathname = action === "status" ? "/status" : "/reconcile";
@@ -43,47 +60,36 @@ const main = async (): Promise<void> => {
     url.searchParams.set("dryRun", String(action === "dry-run"));
   }
 
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    method: action === "status" ? "GET" : "POST",
-    redirect: "error",
-    signal: AbortSignal.timeout(30_000),
-  });
-
-  const body: unknown = await response.json();
-
-  // Project only known safe fields; never echo arbitrary remote error bodies.
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Boundary projects only known response fields.
-  if (typeof body === "object" && body !== null) {
-    const fields = new Set([
-      "status",
-      "dryRun",
-      "runId",
-      "summary",
-      "startedAt",
-      "updatedAt",
-      "error",
-    ]);
-
-    const safe = Object.fromEntries(
-      Object.entries(body).filter(([key]) => fields.has(key))
-    );
-
-    process.stdout.write(
-      `${JSON.stringify({ httpStatus: response.status, ...safe }, null, 2)}\n`
-    );
-  }
-
-  if (!response.ok) {
-    process.exitCode = 1;
-  }
-};
-
-try {
-  await main();
-} catch {
-  process.stderr.write(
-    "Operator request failed; credentials and remote response suppressed.\n"
+  const response = yield* requestEffect(
+    url.toString(),
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      method: action === "status" ? "GET" : "POST",
+    },
+    {}
   );
-  process.exitCode = 1;
-}
+
+  const body = yield* readJsonEffect(response);
+
+  const decoded = yield* Schema.decodeUnknownEffect(OperatorResponse)(
+    body
+  ).pipe(Effect.mapError(() => new OperatorFailure()));
+
+  return { ...decoded, httpStatus: response.status };
+});
+
+await Effect.runPromise(
+  operate(process.argv[2] ?? "status").pipe(
+    Effect.match({
+      onFailure: () => {
+        process.stderr.write(
+          "Operator request failed; credentials and remote response suppressed.\n"
+        );
+        process.exitCode = 1;
+      },
+      onSuccess: (result) => {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      },
+    })
+  )
+);
