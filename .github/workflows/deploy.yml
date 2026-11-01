@@ -1,0 +1,58 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  deployments: write
+
+jobs:
+  production:
+    if: >-
+      github.repository == 'KillzoneGaming/git2linear' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: git2linear-production
+      cancel-in-progress: false
+    steps:
+      - name: Load deployment credentials
+        id: secrets
+        uses: 1Password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5
+        with:
+          version: 2.39.0
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          CLOUDFLARE_DEPLOY_API_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/CLOUDFLARE_DEPLOY_API_TOKEN
+          APP_GITHUB_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/GITHUB_TOKEN
+          APP_LINEAR_API_KEY: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_API_KEY
+          APP_MANUAL_TRIGGER_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/MANUAL_TRIGGER_TOKEN
+      - name: Deploy the exact CI commit
+        uses: mynameistito/alchemy-deploy@382135917559d72946e7c67a0752eaf4c12c785f
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_ACCOUNT_ID: 402722ab1f598e783cd6dcdedc37e1d0
+          CLOUDFLARE_API_TOKEN: ${{ steps.secrets.outputs.CLOUDFLARE_DEPLOY_API_TOKEN }}
+          APP_GITHUB_TOKEN: ${{ steps.secrets.outputs.APP_GITHUB_TOKEN }}
+          APP_LINEAR_API_KEY: ${{ steps.secrets.outputs.APP_LINEAR_API_KEY }}
+          APP_MANUAL_TRIGGER_TOKEN: ${{ steps.secrets.outputs.APP_MANUAL_TRIGGER_TOKEN }}
+          LINEAR_TEAM_ID: 00091889-0699-4cd5-8e23-ef401294956f
+          APPLY_ENABLED: "true"
+          ALCHEMY_CONFIRMED_BINDINGS: core
+          WORKER_ORIGIN: https://git2linear.mynameistito.workers.dev
+        with:
+          worker-name: git2linear
+          production-stage: production
+          production-branch: main
+          production-url: https://git2linear.mynameistito.workers.dev
+          install-command: env -u APP_GITHUB_TOKEN -u APP_LINEAR_API_KEY -u APP_MANUAL_TRIGGER_TOKEN bun install --frozen-lockfile
+          destroy-command: "false"
+          deploy-command: |
+            test "$STAGE" = production
+            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:alchemy:preflight
+            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:alchemy:plan
+            GITHUB_TOKEN="$APP_GITHUB_TOKEN" LINEAR_API_KEY="$APP_LINEAR_API_KEY" MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:alchemy:deploy
+            MANUAL_TRIGGER_TOKEN="$APP_MANUAL_TRIGGER_TOKEN" bun run varlock:operate status
