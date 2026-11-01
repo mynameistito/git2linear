@@ -38,6 +38,78 @@ const options = {
 };
 
 describe("GitHub provider regressions", () => {
+  it("reads recent nonempty deliveries once without numbered pagination", async () => {
+    let calls = 0;
+
+    const client = new GitHubClient({
+      fetch: async (url) => {
+        calls += 1;
+        expect(new URL(url).searchParams.has("page")).toBeFalsy();
+        expect(new URL(url).searchParams.get("per_page")).toBe("100");
+
+        return await Promise.resolve(
+          Response.json([{ event: "ping", id: 42, status_code: 200 }])
+        );
+      },
+      owner: "owner",
+      token: "test",
+    });
+
+    await expect(client.deliveries(repository, 1)).resolves.toStrictEqual({
+      ok: true,
+      value: [{ event: "ping", id: 42, statusCode: 200 }],
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("preserves pagination across unrelated hooks with omitted configuration", async () => {
+    const client = new GitHubClient({
+      fetch: async (url) =>
+        await Promise.resolve(
+          Response.json(
+            new URL(url).searchParams.get("page") === "1"
+              ? [
+                  { active: true, config: {}, events: ["issues"], id: 1 },
+                  {
+                    active: true,
+                    config: {
+                      insecure_ssl: 0,
+                      url: "https://unrelated.example",
+                    },
+                    events: ["push"],
+                    id: 2,
+                  },
+                ]
+              : []
+          )
+        ),
+      owner: "owner",
+      token: "test",
+    });
+
+    await expect(client.listHooks(repository)).resolves.toStrictEqual({
+      ok: true,
+      value: [
+        {
+          active: true,
+          contentType: "",
+          endpoint: "",
+          events: ["issues"],
+          id: 1,
+          insecureSsl: "",
+        },
+        {
+          active: true,
+          contentType: "",
+          endpoint: "https://unrelated.example",
+          events: ["push"],
+          id: 2,
+          insecureSsl: "0",
+        },
+      ],
+    });
+  });
+
   it("inventory paginates through short pages and filters foreign owners without excluding forks or private repositories", async () => {
     let calls = 0;
 

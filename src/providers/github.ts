@@ -174,11 +174,11 @@ const makeGitHub = (options: GitHubOptions): Port => {
 
     return hooks.map((hook) => ({
       active: hook.active,
-      contentType: hook.config.content_type,
-      endpoint: hook.config.url,
+      contentType: hook.config.content_type ?? "",
+      endpoint: hook.config.url ?? "",
       events: hook.events,
       id: hook.id,
-      insecureSsl: hook.config.insecure_ssl,
+      insecureSsl: String(hook.config.insecure_ssl ?? ""),
     }));
   });
 
@@ -233,11 +233,11 @@ const makeGitHub = (options: GitHubOptions): Port => {
 
     return {
       active: hook.active,
-      contentType: hook.config.content_type,
-      endpoint: hook.config.url,
+      contentType: hook.config.content_type ?? "",
+      endpoint: hook.config.url ?? "",
       events: hook.events,
       id: hook.id,
-      insecureSsl: hook.config.insecure_ssl,
+      insecureSsl: String(hook.config.insecure_ssl ?? ""),
     };
   });
 
@@ -277,11 +277,10 @@ const makeGitHub = (options: GitHubOptions): Port => {
 
   const deliveryPage = Effect.fn("GitHub.deliveryPage")(function* deliveryPage(
     repository: Repository,
-    hookId: number,
-    page: number
+    hookId: number
   ) {
     const response = yield* call(
-      pagePath(`${repositoryPath(repository)}/${hookId}/deliveries`, page)
+      `${repositoryPath(repository)}/${hookId}/deliveries?per_page=100`
     );
 
     const json = yield* readJsonEffect(response);
@@ -298,8 +297,7 @@ const makeGitHub = (options: GitHubOptions): Port => {
   });
 
   const deliveries = Effect.fn("GitHub.deliveries")(
-    (repository: Repository, hookId: number) =>
-      collect((page) => deliveryPage(repository, hookId, page), 5)
+    (repository: Repository, hookId: number) => deliveryPage(repository, hookId)
   );
 
   return GitHubService.of({

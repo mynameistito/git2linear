@@ -18,9 +18,11 @@ const Repository = Schema.Struct({
 const Hook = Schema.Struct({
   active: Schema.Boolean,
   config: Schema.Struct({
-    content_type: Schema.String,
-    insecure_ssl: Schema.String,
-    url: Schema.String,
+    content_type: Schema.optionalKey(Schema.String),
+    insecure_ssl: Schema.optionalKey(
+      Schema.Union([Schema.String, Schema.Number])
+    ),
+    url: Schema.optionalKey(Schema.String),
   }),
   events: Schema.Array(Schema.String),
   id: Id,
