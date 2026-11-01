@@ -1,40 +1,82 @@
-/** Compare fixed-size digests.
+import { Effect, Schema } from "effect";
+
+const taggedFailure = Schema.TaggedError;
+const algorithm = "HMAC";
+
+/** Cryptographic platform failure without credential-bearing details. */
+export class AuthenticationError extends taggedFailure<AuthenticationError>()(
+  "AuthenticationError",
+  {}
+) {}
+
+/** Verify credentials through the platform's constant-time HMAC comparison.
  * @param request - Incoming request.
  * @param token - Runtime credential.
  * @returns Whether credentials match.
  */
+export const authorizedEffect = Effect.fn("Authentication.verify")(
+  function* verify(request: Request, token: string | undefined) {
+    if (token === undefined || token.length < 43) {
+      return false;
+    }
+
+    const supplied = request.headers.get("Authorization") ?? "";
+
+    if (supplied.length > 1024) {
+      return false;
+    }
+
+    const encoder = new TextEncoder();
+
+    const key = yield* Effect.tryPromise({
+      catch: () => new AuthenticationError(),
+      try: async () =>
+        await crypto.subtle.importKey(
+          "raw",
+          encoder.encode(token),
+          { hash: "SHA-256", name: algorithm },
+          false,
+          ["sign", "verify"]
+        ),
+    });
+
+    const expected = yield* Effect.tryPromise({
+      catch: () => new AuthenticationError(),
+      try: async () =>
+        await crypto.subtle.sign(
+          algorithm,
+          key,
+          encoder.encode(`Bearer ${token}`)
+        ),
+    });
+
+    return yield* Effect.tryPromise({
+      catch: () => new AuthenticationError(),
+      try: async () =>
+        await crypto.subtle.verify(
+          algorithm,
+          key,
+          expected,
+          encoder.encode(supplied)
+        ),
+    });
+  }
+);
+
+/** Promise boundary for the platform HTTP handler, failing closed on crypto errors.
+ * @param request - Incoming request.
+ * @param token - Configured credential.
+ * @returns Whether authentication succeeded.
+ */
 export const authorized = async (
   request: Request,
   token: string | undefined
-): Promise<boolean> => {
-  if (token === undefined || token.length < 43) {
-    return false;
-  }
-
-  const supplied = request.headers.get("Authorization") ?? "";
-
-  if (supplied.length > 1024) {
-    return false;
-  }
-
-  const encoder = new TextEncoder();
-
-  const [actual, expected] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(supplied)),
-    crypto.subtle.digest("SHA-256", encoder.encode(`Bearer ${token}`)),
-  ]);
-
-  const left = new Uint8Array(actual);
-  const right = new Uint8Array(expected);
-  let difference = 0;
-
-  for (let index = 0; index < left.length; index += 1) {
-    // oxlint-disable-next-line eslint/no-bitwise -- Constant-time digest comparison.
-    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
-  }
-
-  return difference === 0;
-};
+): Promise<boolean> =>
+  await Effect.runPromise(
+    authorizedEffect(request, token).pipe(
+      Effect.catch(() => Effect.succeed(false))
+    )
+  );
 
 /** Check bootstrap readiness before scheduled work can access providers.
  * @param credentials - Runtime core credentials, absent during bootstrap.
