@@ -1,97 +1,98 @@
-/* oxlint-disable vitest/prefer-importing-vitest-globals -- Bun is the actual test runtime. */
-/* oxlint-disable eslint/require-await, eslint/no-await-in-loop -- Deterministic storage fixture and sequential durable maintenance batches. */
-import { expect, test } from "vitest";
+import { Effect } from "effect";
+import { describe, expect, it } from "vitest";
 
-import { pruneReportBatch } from "../../src/platform/retention";
+import { pruneEffect, pruneReportBatch } from "../../src/platform/retention";
 import type { ReportRetentionStore } from "../../src/platform/retention";
 
 const fixture = () => {
   const records = new Set<string>();
   let cursor: string | undefined;
-  const deleted: string[][] = [];
+  const deleted: number[] = [];
 
   const store: ReportRetentionStore = {
-    cursor: async () => cursor,
+    cursor: async () => await Effect.runPromise(Effect.sync(() => cursor)),
     keys: async (after, limit) =>
-      [...records]
-        .filter(
-          (key) =>
-            key.startsWith("repository:") &&
-            (after === undefined || key > after)
-        )
-        .toSorted()
-        .slice(0, limit),
+      await Promise.resolve(
+        [...records]
+          .toSorted()
+          .filter((key) => key.startsWith("repository:") && key > (after ?? ""))
+          .slice(0, limit)
+      ),
     remove: async (keys) => {
-      deleted.push(keys);
+      deleted.push(keys.length);
 
       for (const key of keys) {
         records.delete(key);
       }
+
+      await Promise.resolve();
     },
     saveCursor: async (next) => {
       cursor = next ?? undefined;
+      await Promise.resolve();
     },
   };
 
   return { deleted, records, store };
 };
 
-test("bounded retention keeps two report sets and stable identity/intent records", async () => {
-  const state = fixture();
+describe("report retention", () => {
+  it("bounds cleanup and keeps current, previous, identity and intent records", async () => {
+    const state = fixture();
 
-  for (let index = 0; index < 225; index += 1) {
-    state.records.add(`repository:old:${String(index).padStart(3, "0")}`);
-  }
+    for (let index = 0; index < 225; index += 1) {
+      state.records.add(`repository:old:${String(index).padStart(3, "0")}`);
+    }
 
-  state.records.add("repository:current:42");
-  state.records.add("repository:previous:43");
-  state.records.add("identity:42");
-  state.records.add("intent:42:project");
-  let more = true;
-  let batches = 0;
+    state.records.add("repository:current:42");
+    state.records.add("repository:previous:43");
+    state.records.add("identity:42");
+    state.records.add("intent:42:project");
 
-  while (more) {
-    more = await pruneReportBatch(state.store, "current", "previous");
-    batches += 1;
-  }
+    const batches = await Effect.runPromise(
+      Effect.gen(function* cleanup() {
+        return [
+          yield* pruneEffect(state.store, "current", "previous"),
+          yield* pruneEffect(state.store, "current", "previous"),
+          yield* pruneEffect(state.store, "current", "previous"),
+        ];
+      })
+    );
 
-  expect(batches).toBe(3);
-  expect(state.deleted.every((batch) => batch.length <= 100)).toBe(true);
-  expect([...state.records].toSorted()).toEqual([
-    "identity:42",
-    "intent:42:project",
-    "repository:current:42",
-    "repository:previous:43",
-  ]);
-});
+    expect(batches).toStrictEqual([true, true, false]);
+    expect(state.deleted.every((size) => size <= 100)).toBeTruthy();
+    expect([...state.records].toSorted()).toStrictEqual([
+      "identity:42",
+      "intent:42:project",
+      "repository:current:42",
+      "repository:previous:43",
+    ]);
+  });
 
-test("interrupted cleanup replays safely without removing current/previous reports", async () => {
-  const state = fixture();
-  state.records.add("repository:old:1");
-  state.records.add("repository:current:2");
-  let fail = true;
+  it("replays interrupted cleanup safely", async () => {
+    const state = fixture();
 
-  const failing = {
-    ...state.store,
-    saveCursor: async (next: string | null) => {
-      if (fail) {
-        fail = false;
-        throw new Error("interrupted");
-      }
+    state.records.add("repository:old:1");
+    state.records.add("repository:current:2");
+    state.records.add("repository:previous:3");
 
-      await state.store.saveCursor(next);
-    },
-  };
+    const failing: ReportRetentionStore = {
+      ...state.store,
+      saveCursor: async () =>
+        await Effect.runPromise(Effect.fail(new Error("interrupted"))),
+    };
 
-  let interrupted = false;
+    const failure = await Effect.runPromise(
+      Effect.flip(pruneEffect(failing, "current", "previous"))
+    );
 
-  try {
-    await pruneReportBatch(failing, "current", undefined);
-  } catch {
-    interrupted = true;
-  }
-
-  expect(interrupted).toBe(true);
-  expect(await pruneReportBatch(state.store, "current", undefined)).toBe(false);
-  expect([...state.records]).toEqual(["repository:current:2"]);
+    expect(failure.operation).toBe("retention-save-cursor");
+    await expect(
+      pruneReportBatch(state.store, "current", "previous")
+    ).resolves.toBeFalsy();
+    expect([...state.records].toSorted()).toStrictEqual([
+      "repository:current:2",
+      "repository:previous:3",
+    ]);
+  });
 });
