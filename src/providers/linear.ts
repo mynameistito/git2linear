@@ -1,13 +1,22 @@
-/* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type, anti-slop/no-object-parameters -- This adapter parses untrusted GraphQL JSON into domain records at the I/O boundary. */
 /** Schema source: https://github.com/linear/linear/blob/master/packages/sdk/src/schema.graphql */
+import { Effect, Layer, Schema } from "effect";
+
 import type { Project } from "../domain/reconciliation.ts";
-import { readJson, request } from "./http.ts";
+import {
+  ProviderError,
+  ProviderFailureSchema,
+  readJsonEffect,
+  requestEffect,
+} from "./http.ts";
 import type { HttpOptions, ProviderResult } from "./http.ts";
-
-const invalid = { error: { kind: "invalid-response" }, ok: false } as const;
-
-const record = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+import {
+  AttachResponse,
+  CreateResponse,
+  ProjectsResponse,
+  LinearService,
+  TeamResponse,
+  UpdateResponse,
+} from "./linear-schema.ts";
 
 /** A single durable page of projects, including archived projects. */
 export interface ProjectPage {
@@ -15,201 +24,139 @@ export interface ProjectPage {
   readonly nextCursor: string | null;
 }
 
-/** Supported public project operations; no native integration-settings mutations. */
-export class LinearProjects {
-  readonly #authorization: string;
-  readonly #options: HttpOptions;
-  /** Construct a secret-safe provider; authorization accepts API key or OAuth Bearer header.
-   * @param authorization - Secret complete authorization header.
-   * @param options - Injectable transport.
-   */
-  constructor(authorization: string, options: HttpOptions = {}) {
-    this.#authorization = authorization;
-    this.#options = options;
-  }
+/** Persisted intent for project creation. */
+export interface CreateProjectInput {
+  readonly id: string;
+  readonly name: string;
+  readonly repositoryUrl: string;
+  readonly teamId: string;
+}
 
-  async #query(
-    query: string,
-    variables: object
-  ): Promise<ProviderResult<Record<string, unknown>>> {
-    const response = await request(
+/** Persisted intent for adding a project link. */
+export interface AttachLinkInput {
+  readonly id: string;
+  readonly projectId: string;
+  readonly url: string;
+}
+
+/** Native operations supported by the Linear provider. */
+export interface LinearOperations {
+  readonly page: (
+    after: string | null
+  ) => Effect.Effect<ProjectPage, ProviderError>;
+  readonly verifyTeam: (
+    id: string,
+    key: string
+  ) => Effect.Effect<boolean, ProviderError>;
+  readonly create: (
+    input: CreateProjectInput
+  ) => Effect.Effect<boolean, ProviderError>;
+  readonly rename: (
+    id: string,
+    name: string
+  ) => Effect.Effect<boolean, ProviderError>;
+  readonly attach: (
+    input: AttachLinkInput
+  ) => Effect.Effect<boolean, ProviderError>;
+}
+
+export { LinearService } from "./linear-schema.ts";
+
+type Variables =
+  | { readonly after: string | null }
+  | { readonly id: string }
+  | { readonly id: string; readonly input: { readonly name: string } }
+  | {
+      readonly input:
+        | {
+            readonly description: string;
+            readonly id: string;
+            readonly name: string;
+            readonly teamIds: readonly string[];
+          }
+        | (AttachLinkInput & { readonly label: string });
+    };
+
+const invalid = () => new ProviderError({ kind: "invalid-response" });
+
+/** Construct the native adapter.
+ * @param authorization - Authorization header.
+ * @param options - Optional transport.
+ * @returns Native operations.
+ */
+export const makeLinearOperations = (
+  authorization: string,
+  options: HttpOptions = {}
+): LinearOperations => {
+  const query = Effect.fn("Linear.query")(function* query(
+    document: string,
+    variables: Variables
+  ) {
+    const response = yield* requestEffect(
       "https://api.linear.app/graphql",
       {
-        body: JSON.stringify({ query, variables }),
+        body: JSON.stringify({ query: document, variables }),
         headers: {
-          Authorization: this.#authorization,
+          Authorization: authorization,
           "Content-Type": "application/json",
         },
         method: "POST",
       },
-      this.#options
+      options
     );
 
-    if (!response.ok) {
-      return response;
-    }
+    return yield* readJsonEffect(response);
+  });
 
-    const json = await readJson(response.value);
-
-    if (!json.ok) {
-      return json;
-    }
-
-    if (
-      !record(json.value) ||
-      json.value.errors !== undefined ||
-      !record(json.value.data)
-    ) {
-      return invalid;
-    }
-
-    return { ok: true, value: json.value.data };
-  }
-
-  /* oxlint-disable eslint/complexity, sonarjs/cognitive-complexity, sonarjs/expression-complexity -- Complete protocol parsing is intentionally fail closed. */
-  /** Fetch one bounded inventory page. Nested pagination overflow fails closed.
-   * @param after - Previously saved cursor, or null.
-   * @returns Parsed project page or sanitized provider error.
-   */
-  async page(after: string | null): Promise<ProviderResult<ProjectPage>> {
-    const result = await this.#query(
+  const page = Effect.fn("Linear.page")(function* page(after: string | null) {
+    const json = yield* query(
       `query Projects($after:String){projects(first:25,after:$after,includeArchived:true){nodes{id name description archivedAt teams(first:10){nodes{id} pageInfo{hasNextPage}} externalLinks(first:10){nodes{url} pageInfo{hasNextPage}}}pageInfo{hasNextPage endCursor}}}`,
       { after }
     );
 
-    if (!result.ok) {
-      return result;
+    const result = yield* Schema.decodeUnknownEffect(ProjectsResponse)(
+      json
+    ).pipe(Effect.mapError(invalid));
+
+    const { nodes, pageInfo } = result.data.projects;
+
+    if (pageInfo.hasNextPage && pageInfo.endCursor === after) {
+      return yield* Effect.fail(invalid());
     }
 
-    const connection = result.value.projects;
-
-    if (
-      !record(connection) ||
-      !Array.isArray(connection.nodes) ||
-      !record(connection.pageInfo)
-    ) {
-      return invalid;
-    }
-
-    const projects: Project[] = [];
-
-    for (const node of connection.nodes) {
-      if (
-        !record(node) ||
-        typeof node.id !== "string" ||
-        typeof node.name !== "string" ||
-        typeof node.description !== "string" ||
-        !(node.archivedAt === null || typeof node.archivedAt === "string") ||
-        !record(node.teams) ||
-        !record(node.externalLinks)
-      ) {
-        return invalid;
-      }
-
-      const { teams } = node;
-      const links = node.externalLinks;
-
-      if (
-        !Array.isArray(teams.nodes) ||
-        !Array.isArray(links.nodes) ||
-        !record(teams.pageInfo) ||
-        teams.pageInfo.hasNextPage !== false ||
-        !record(links.pageInfo) ||
-        links.pageInfo.hasNextPage !== false
-      ) {
-        return invalid;
-      }
-
-      const teamIds: string[] = [];
-      const urls: string[] = [];
-
-      for (const team of teams.nodes) {
-        if (!record(team) || typeof team.id !== "string") {
-          return invalid;
-        }
-
-        teamIds.push(team.id);
-      }
-
-      for (const link of links.nodes) {
-        if (!record(link) || typeof link.url !== "string") {
-          return invalid;
-        }
-
-        urls.push(link.url);
-      }
-
-      projects.push({
+    return {
+      nextCursor: pageInfo.hasNextPage ? pageInfo.endCursor : null,
+      projects: nodes.map((node) => ({
         archived: node.archivedAt !== null,
         id: node.id,
         name: node.name,
         summary: node.description,
-        teamIds,
-        urls,
-      });
-    }
-
-    const info = connection.pageInfo;
-
-    if (
-      typeof info.hasNextPage !== "boolean" ||
-      (info.hasNextPage &&
-        (typeof info.endCursor !== "string" || info.endCursor === after))
-    ) {
-      return invalid;
-    }
-
-    return {
-      ok: true,
-      value: {
-        nextCursor:
-          info.hasNextPage && typeof info.endCursor === "string"
-            ? info.endCursor
-            : null,
-        projects,
-      },
+        teamIds: node.teams.nodes.map((team) => team.id),
+        urls: node.externalLinks.nodes.map((link) => link.url),
+      })),
     };
-  }
+  });
 
-  /* oxlint-enable eslint/complexity, sonarjs/cognitive-complexity, sonarjs/expression-complexity */
+  const verifyTeam = Effect.fn("Linear.verifyTeam")(function* verifyTeam(
+    id: string,
+    key: string
+  ) {
+    const json = yield* query("query Team($id:String!){team(id:$id){id key}}", {
+      id,
+    });
 
-  /** Verify the configured team identity without modifying its settings.
-   * @param id - Configured team UUID.
-   * @param key - Required team key.
-   * @returns Whether the saved team matches.
-   */
-  async verifyTeam(id: string, key: string): Promise<ProviderResult<boolean>> {
-    const result = await this.#query(
-      "query Team($id:String!){team(id:$id){id key}}",
-      { id }
+    const result = yield* Schema.decodeUnknownEffect(TeamResponse)(json).pipe(
+      Effect.mapError(invalid)
     );
 
-    if (!result.ok) {
-      return result;
-    }
+    return result.data.team.id === id && result.data.team.key === key;
+  });
 
-    const { team } = result.value;
-
-    return record(team) &&
-      typeof team.id === "string" &&
-      typeof team.key === "string"
-      ? { ok: true, value: team.id === id && team.key === key }
-      : invalid;
-  }
-
-  /** Create using a persisted UUID-v4 intent; callers verify inventory after every outcome.
-   * @param input - Persisted project intent and team association.
-   * @returns Mutation acknowledgement only, never proof of reconciliation.
-   */
-  async create(input: {
-    readonly id: string;
-    readonly name: string;
-    readonly repositoryUrl: string;
-    readonly teamId: string;
-  }): Promise<ProviderResult<boolean>> {
-    return await this.#mutation(
+  const create = Effect.fn("Linear.create")(function* create(
+    input: CreateProjectInput
+  ) {
+    const json = yield* query(
       "mutation Create($input:ProjectCreateInput!){projectCreate(input:$input){success}}",
-      "projectCreate",
       {
         input: {
           description: `GitHub repository: ${input.repositoryUrl}`,
@@ -219,52 +166,121 @@ export class LinearProjects {
         },
       }
     );
-  }
 
-  /** Rename only; preserve descriptions, team settings and unrelated configuration.
-   * @param id - Existing project UUID.
-   * @param name - Current repository name.
-   * @returns Mutation acknowledgement requiring subsequent verification.
-   */
-  async rename(id: string, name: string): Promise<ProviderResult<boolean>> {
-    return await this.#mutation(
+    const result = yield* Schema.decodeUnknownEffect(CreateResponse)(json).pipe(
+      Effect.mapError(invalid)
+    );
+
+    return result.data.projectCreate.success;
+  });
+
+  const rename = Effect.fn("Linear.rename")(function* rename(
+    id: string,
+    name: string
+  ) {
+    const json = yield* query(
       "mutation Rename($id:String!,$input:ProjectUpdateInput!){projectUpdate(id:$id,input:$input){success}}",
-      "projectUpdate",
       { id, input: { name } }
     );
-  }
 
-  /** Add a resource with a persisted UUID so interrupted creation can be recovered safely.
-   * @param input - Persisted resource intent.
-   * @returns Mutation acknowledgement requiring subsequent inventory verification.
-   */
-  async attach(input: {
-    readonly id: string;
-    readonly projectId: string;
-    readonly url: string;
-  }): Promise<ProviderResult<boolean>> {
-    return await this.#mutation(
+    const result = yield* Schema.decodeUnknownEffect(UpdateResponse)(json).pipe(
+      Effect.mapError(invalid)
+    );
+
+    return result.data.projectUpdate.success;
+  });
+
+  const attach = Effect.fn("Linear.attach")(function* attach(
+    input: AttachLinkInput
+  ) {
+    const json = yield* query(
       "mutation Attach($input:EntityExternalLinkCreateInput!){entityExternalLinkCreate(input:$input){success}}",
-      "entityExternalLinkCreate",
       { input: { ...input, label: "GitHub repository" } }
     );
+
+    const result = yield* Schema.decodeUnknownEffect(AttachResponse)(json).pipe(
+      Effect.mapError(invalid)
+    );
+
+    return result.data.entityExternalLinkCreate.success;
+  });
+
+  return { attach, create, page, rename, verifyTeam };
+};
+
+/** Construct a layer providing the native Linear adapter.
+ * @param authorization - Authorization header.
+ * @param options - Optional transport.
+ * @returns Provider layer.
+ */
+export const linearLayer = (authorization: string, options: HttpOptions = {}) =>
+  Layer.effect(
+    LinearService,
+    Effect.sync(() =>
+      LinearService.of(makeLinearOperations(authorization, options))
+    )
+  );
+
+const decodeFailure = Schema.decodeUnknownSync(ProviderFailureSchema);
+
+const legacy = async <T>(
+  effect: Effect.Effect<T, ProviderError>
+): Promise<ProviderResult<T>> =>
+  await Effect.runPromise(
+    effect.pipe(
+      Effect.match({
+        onFailure: (error): ProviderResult<T> => ({
+          error: decodeFailure(error),
+          ok: false,
+        }),
+        onSuccess: (value): ProviderResult<T> => ({ ok: true, value }),
+      })
+    )
+  );
+
+/** Supported project operations with Promise compatibility and native Effects. */
+export class LinearProjects {
+  /** Native operations for Effect consumers. */
+  readonly effects: LinearOperations;
+  /** Construct a provider with an authorization header and optional transport. */
+  constructor(authorization: string, options: HttpOptions = {}) {
+    this.effects = makeLinearOperations(authorization, options);
   }
-
-  async #mutation(
-    query: string,
-    field: string,
-    variables: object
-  ): Promise<ProviderResult<boolean>> {
-    const result = await this.#query(query, variables);
-
-    if (!result.ok) {
-      return result;
-    }
-
-    const payload = result.value[field];
-
-    return record(payload) && typeof payload.success === "boolean"
-      ? { ok: true, value: payload.success }
-      : invalid;
+  /** Fetch one bounded inventory page.
+   * @param after - Saved cursor.
+   * @returns Provider result.
+   */
+  async page(after: string | null): Promise<ProviderResult<ProjectPage>> {
+    return await legacy(this.effects.page(after));
+  }
+  /** Verify the configured team identity.
+   * @param id - Team ID.
+   * @param key - Team key.
+   * @returns Provider result.
+   */
+  async verifyTeam(id: string, key: string): Promise<ProviderResult<boolean>> {
+    return await legacy(this.effects.verifyTeam(id, key));
+  }
+  /** Create a project using a persisted intent.
+   * @param input - Persisted intent.
+   * @returns Provider result.
+   */
+  async create(input: CreateProjectInput): Promise<ProviderResult<boolean>> {
+    return await legacy(this.effects.create(input));
+  }
+  /** Rename a project without changing other fields.
+   * @param id - Project ID.
+   * @param name - New name.
+   * @returns Provider result.
+   */
+  async rename(id: string, name: string): Promise<ProviderResult<boolean>> {
+    return await legacy(this.effects.rename(id, name));
+  }
+  /** Attach a link using a persisted intent.
+   * @param input - Persisted intent.
+   * @returns Provider result.
+   */
+  async attach(input: AttachLinkInput): Promise<ProviderResult<boolean>> {
+    return await legacy(this.effects.attach(input));
   }
 }
