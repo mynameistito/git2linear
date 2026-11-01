@@ -214,15 +214,24 @@ const makeGitHub = (options: GitHubOptions): Port => {
 
     const config = { content_type: "json", insecure_ssl: "0", url: endpoint };
 
+    if (id !== null) {
+      yield* call(
+        `${repositoryPath(repository)}/${id}/config`,
+        "PATCH",
+        JSON.stringify(config)
+      );
+    }
+
+    const payload = { active: true, events: ["push"], name: "web" };
+
     const response = yield* call(
       repositoryPath(repository) + (id === null ? "" : `/${id}`),
       id === null ? "POST" : "PATCH",
-      JSON.stringify({
-        active: true,
-        config: id === null ? { ...config, secret: webhookSecret } : config,
-        events: ["push"],
-        name: "web",
-      })
+      JSON.stringify(
+        id === null
+          ? { ...payload, config: { ...config, secret: webhookSecret } }
+          : payload
+      )
     );
 
     const json = yield* readJsonEffect(response);

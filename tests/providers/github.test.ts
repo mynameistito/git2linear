@@ -190,13 +190,16 @@ describe("GitHub provider regressions", () => {
 
   it("repair sets native push configuration without resetting signing secret", async () => {
     let reads = 0;
-    let body: unknown;
+    const writes: { path: string; body: unknown }[] = [];
 
     const client = new GitHubClient({
       ...options,
-      fetch: async (_url, init) => {
+      fetch: async (url, init) => {
         if (init?.method === "PATCH") {
-          body = parseJsonBody(init.body);
+          writes.push({
+            body: parseJsonBody(init.body),
+            path: new URL(url).pathname,
+          });
 
           return await Promise.resolve(Response.json(hook));
         }
@@ -209,16 +212,20 @@ describe("GitHub provider regressions", () => {
 
     const repair = await client.repairHook(repository, 10);
     expect(repair.ok).toBeTruthy();
-    expect(body).toStrictEqual({
-      active: true,
-      config: {
-        content_type: "json",
-        insecure_ssl: "0",
-        url: options.endpoint,
+    expect(writes).toStrictEqual([
+      {
+        body: {
+          content_type: "json",
+          insecure_ssl: "0",
+          url: options.endpoint,
+        },
+        path: "/repos/mynameistito/repo/hooks/10/config",
       },
-      events: ["push"],
-      name: "web",
-    });
+      {
+        body: { active: true, events: ["push"], name: "web" },
+        path: "/repos/mynameistito/repo/hooks/10",
+      },
+    ]);
   });
 
   it("rate limits expose only durable retry deadline and status", async () => {
