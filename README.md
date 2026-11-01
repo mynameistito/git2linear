@@ -34,6 +34,16 @@ Effect 4.1.1 owns provider operations, reconciliation, durable orchestration, co
 
 The Effect migration is reviewed in the PR and has not replaced the deployed release recorded above.
 
+## Alchemy migration assessment
+
+The Alchemy migration is blocked pending a verified way to retain every existing Worker secret during adoption. The existing `cf` configuration remains the deployment source; no Alchemy stack or deployment has been created.
+
+On 2026-11-01, the published `alchemy` and `@alchemy.run/cloudflare` packages were both `2.0.0-beta.84`. Their Effect peer range is `^4.0.5`, which includes this project's `4.1.1`. Alchemy's [Durable Objects adoption documentation](https://alchemy.run/cloudflare/compute/durable-objects/#adopt-a-worker-deployed-by-wrangler) describes preserving existing namespaces and their storage backend when adopting a Worker. The existing class export `Reconciler`, Worker name `git2linear`, account `402722ab1f598e783cd6dcdedc37e1d0`, and singleton name `${GITHUB_OWNER}:${LINEAR_TEAM_ID}` must all remain stable. The application currently uses `mynameistito` and the validated Linear team UUID. Alchemy supports the existing `0 * * * *` schedule through the Worker's `crons` property for an existing scheduled handler.
+
+The inspected beta.84 Worker provider sets `keepBindings` to `undefined` for script uploads and constructs secret bindings from supplied values. Its documented async Worker configuration uses `Config.Redacted` to supply secrets at deploy time. Neither establishes that omitted, already provisioned secrets survive adoption. This includes the three core secrets and any optional webhook secrets that might have been added since the recorded deployment. Do not adopt using a configuration that omits them or assumes they will be retained. Before implementation, establish a supported preservation mechanism or an explicitly authorized, secure procedure to supply the complete current set, and verify the resulting plan and account without exposing values. No credential or live binding inspection was performed for this assessment.
+
+Alchemy's [local state store](https://alchemy.run/state-store/) avoids creating a Cloudflare state-store Worker and supporting secrets, but requires a durable, access-controlled shared state strategy for later operators. `Cloudflare.state()` can bootstrap additional resources even on `plan`, so it is outside this task's constraints. No Alchemy build or plan has been verified; the existing commands above remain in effect. Retain UUID validation and add configuration tests when a safe Alchemy stack is implemented.
+
 ## Configuration and deployment
 
 The `cloudflare.config.ts` deployment is named `git2linear`, in the Personal Cloudflare account. Confirm the account before reusing this project elsewhere. Set the discovered `LINEAR_TEAM_ID` in the build environment; the team key is MY. The hourly schedule is `0 * * * *` (UTC). A singleton Durable Object per owner/team stores identities, operation intents, checkpoints, repository outcomes and failures. Each alarm advances bounded work, arms a recovery alarm before external effects, and persists continuation. Running requests return the existing run rather than starting another.
