@@ -14,6 +14,8 @@ The second apply completed with 203 discovered, 122 already configured, zero cre
 
 ## Current integration limitation
 
+A live verification on 2026-11-01 completed an authenticated dry run followed by manual apply using the same reconciliation workflow as cron. Each discovered 203 repositories, found 122 already configured, skipped 81 archived repositories, made zero changes, and recorded zero failures. All 203 apply reports were retrieved and the continuation alarm cleared. Independent pagination confirmed 203 Linear projects, all 202 original project IDs retained, and exactly one correctly named and linked MY project per eligible repository. A separate authenticated hook audit inspected all 203 repositories (100 private, 37 forks): zero native Linear hooks and three unrelated hooks, which were untouched. All 122 eligible repositories lack native commit hooks. The three core runtime secret bindings are present and functional; `LINEAR_WEBHOOK_URL` and `LINEAR_WEBHOOK_SECRET` are absent. No ping delivery or real push processing is claimed.
+
 Investigation on 2026-11-01 observed 207 saved GitHub integration mappings, including multiple bidirectional mappings under MY. Existing mappings and the default issue repository are preserved. The connected OAuth credential previously rejected integration-settings mutations. A supported unattended API and sufficient permissions for changing native issue-sync configuration have not been established. Consequently, the Worker reports native two-way sync and project routing as manual actions. A project does not automatically receive synced issues. No competing custom issue sync is installed.
 
 ## Development
@@ -89,7 +91,7 @@ This command provisions the three core runtime secrets without resolving optiona
 
 ## Manual operations
 
-Both deployment configurations enable native Cloudflare invocation logs and traces at 100% sampling, persist them to Cloudflare, and redact URL query strings. Do not log credentials, request headers, payloads or native webhook URLs. The live Worker's observability settings were enabled and read back through the script-settings API on 2026-11-01 without replacing its code or bindings. The provisioning credential cannot query stored telemetry (HTTP 403); viewing emitted events requires an appropriate existing observability reader credential. Saved settings alone do not prove trace ingestion or successful reconciliation.
+Both deployment configurations enable native Cloudflare invocation logs and traces at 100% sampling, persist them to Cloudflare, and redact URL query strings. Do not log credentials, request headers, payloads or native webhook URLs. The live Worker's observability settings were enabled and read back through the script-settings API on 2026-11-01 without replacing its code or bindings. The provisioning credential cannot query stored telemetry (HTTP 403); the existing Cloudflare CLI login successfully queried 100 recent events and 100 traces belonging to `git2linear`, with no errors in those sampled traces. Use that supported login for inspection; no credential permissions were expanded. Trace ingestion and successful reconciliation are separate checks.
 
 Set `WORKER_ORIGIN` to the deployed HTTPS origin. The operator script injects the bearer credential through the environment, never an argument. Requests reject redirects and have a 30-second timeout.
 
