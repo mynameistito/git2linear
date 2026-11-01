@@ -9,6 +9,7 @@ import { AdoptPolicy, Stack } from "alchemy";
 import { ConfigProvider, Effect, Layer } from "effect";
 
 import { deploymentConfig } from "./alchemy/deployment";
+import { stateContextLayer } from "./alchemy/state-policy";
 import { workerIdentity } from "./src/platform/deployment.ts";
 
 export default Stack(
@@ -17,6 +18,7 @@ export default Stack(
     providers: providers(),
     // Missing or outdated shared stores must fail even for local plans.
     state: state().pipe(
+      Layer.provide(stateContextLayer),
       Layer.provide(
         ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ CI: "true" }), {
           asPrimary: true,
