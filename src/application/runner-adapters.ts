@@ -33,6 +33,7 @@ export const CheckpointSchema = Schema.Struct({
   change: Schema.Literals(["none", "created", "repaired"]),
   cursor: Schema.NullOr(Schema.String),
   index: Schema.Number,
+  inventoryAttempts: Schema.optionalKey(Schema.Number),
   page: Schema.Number,
   phase: Schema.Literals(["repositories", "projects", "reconcile"]),
   projects: Schema.Array(ProjectSchema).pipe(Schema.mutable),

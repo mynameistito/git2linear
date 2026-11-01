@@ -82,6 +82,7 @@ interface Checkpoint {
   repositories: Repository[];
   projects: Project[];
   index: number;
+  inventoryAttempts?: number;
   attempts: number;
   change: "none" | "created" | "repaired";
   summary: RunSummary;
@@ -178,6 +179,8 @@ export class ReconciliationRunner implements StepRunner {
         summary: emptySummary(),
       };
 
+      delete state.providerFailure;
+
       if (state.phase === "repositories") {
         const result = yield* this.#options.github.listRepositoryPage(
           state.page
@@ -194,6 +197,7 @@ export class ReconciliationRunner implements StepRunner {
         state.summary.discovered = state.repositories.length;
         state.page += 1;
         state.attempts = 0;
+        state.inventoryAttempts = 0;
         state.change = "none";
 
         if (!result.value.hasNextPage) {
@@ -212,6 +216,7 @@ export class ReconciliationRunner implements StepRunner {
 
         state.projects.push(...result.value.projects);
         state.cursor = result.value.nextCursor;
+        state.inventoryAttempts = 0;
 
         if (state.cursor === null) {
           state.phase = "reconcile";
@@ -278,9 +283,18 @@ export class ReconciliationRunner implements StepRunner {
         };
       }
 
-      state.attempts += 1;
+      if (state.phase === "reconcile") {
+        state.attempts += 1;
+      } else {
+        state.inventoryAttempts = (state.inventoryAttempts ?? 0) + 1;
+      }
 
-      if (state.attempts >= 4 || failure.retryAt === undefined) {
+      const attempts =
+        state.phase === "reconcile"
+          ? state.attempts
+          : (state.inventoryAttempts ?? 0);
+
+      if (attempts >= 4 || failure.retryAt === undefined) {
         if (state.phase !== "reconcile") {
           return yield* Effect.fail(
             new ReconciliationError({ operation: "inventory-unavailable" })
@@ -627,22 +641,27 @@ export class ReconciliationRunner implements StepRunner {
       const { github } = this.#options;
       const baseline = yield* github.deliveries(repository, hookId);
 
-      const previousIds = new Set(
-        baseline.ok ? baseline.value.map((entry) => entry.id) : []
-      );
+      if (!baseline.ok) {
+        return yield* this.#retry(state, baseline.error);
+      }
+
+      const previousIds = new Set(baseline.value.map((entry) => entry.id));
 
       const ping = yield* github.pingHook(repository, hookId);
+
+      if (!ping.ok) {
+        return yield* this.#retry(state, ping.error);
+      }
+
       const deliveries = yield* github.deliveries(repository, hookId);
 
-      const delivery = deliveries.ok
-        ? deliveries.value.find(
-            (entry) =>
-              baseline.ok &&
-              ping.ok &&
-              entry.event === "ping" &&
-              !previousIds.has(entry.id)
-          )
-        : undefined;
+      if (!deliveries.ok) {
+        return yield* this.#retry(state, deliveries.error);
+      }
+
+      const delivery = deliveries.value.find(
+        (entry) => entry.event === "ping" && !previousIds.has(entry.id)
+      );
 
       let pingDelivery: "verified" | "failed" | "pending" = "pending";
 

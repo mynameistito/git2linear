@@ -173,6 +173,120 @@ const withoutEndpoint = ({
 };
 
 describe("reconciliation runner regressions", () => {
+  it.each(["baseline", "ping", "delivery"])(
+    "records %s provider verification failures without counting success",
+    async (stage) => {
+      const records: RepositoryStatus[] = [];
+      const options = configuredOptions(records);
+      const originalDeliveries = options.github.deliveries;
+      let reads = 0;
+
+      options.github.deliveries = async (repository, id) => {
+        reads += 1;
+
+        if (
+          (stage === "baseline" && reads === 1) ||
+          (stage === "delivery" && reads === 2)
+        ) {
+          return await Promise.resolve({
+            error: { kind: "http", status: 403 },
+            ok: false,
+          });
+        }
+
+        return await originalDeliveries(repository, id);
+      };
+
+      if (stage === "ping") {
+        options.github.pingHook = async () =>
+          await Promise.resolve({
+            error: { kind: "http", status: 403 },
+            ok: false,
+          });
+      }
+
+      const result = await finish(options);
+      expect(result.summary.failed).toBe(1);
+      expect(result.summary.alreadyConfigured).toBe(0);
+      expect(records).toHaveLength(1);
+      expect(records[0]?.outcome).toBe("failed");
+      expect(records[0]?.supportedStateVerified).not.toBeTruthy();
+    }
+  );
+
+  it("resets successful project-page retries and clears recovered diagnostics", async () => {
+    const options = configuredOptions([]);
+    const originalPage = options.linear.page;
+    let calls = 0;
+
+    options.linear.page = async () => {
+      calls += 1;
+
+      if (calls % 2 === 1) {
+        return await Promise.resolve({
+          error: { kind: "http", retryAt: 1000, status: 503 },
+          ok: false,
+        });
+      }
+
+      const result = await originalPage(null);
+
+      if (!result.ok) {
+        return result;
+      }
+
+      return {
+        ok: true,
+        value: {
+          nextCursor: calls < 8 ? String(calls) : null,
+          projects: calls === 8 ? result.value.projects : [],
+        },
+      };
+    };
+
+    const result = await finish(options);
+
+    const checkpoint = Schema.decodeUnknownSync(CheckpointSchema)(
+      result.checkpoint
+    );
+
+    expect(result.done).toBeTruthy();
+    expect(result.summary).toMatchObject({ alreadyConfigured: 1, failed: 0 });
+    expect(calls).toBe(8);
+    expect(checkpoint.inventoryAttempts).toBe(0);
+    expect(checkpoint.providerFailure).toBeUndefined();
+  });
+
+  it("preserves mutation attempts while resetting a successful inventory page", async () => {
+    const runner = new ReconciliationRunner(configuredOptions([]));
+
+    const result = await runner.step({
+      checkpoint: {
+        attempts: 3,
+        change: "created",
+        cursor: null,
+        index: 0,
+        inventoryAttempts: 2,
+        page: 1,
+        phase: "projects",
+        projects: [],
+        providerFailure: { kind: "http", status: 503 },
+        repositories: [],
+        summary: emptySummary(),
+      },
+      dryRun: false,
+      runId: "mutation-budget",
+    });
+
+    const checkpoint = Schema.decodeUnknownSync(CheckpointSchema)(
+      result.checkpoint
+    );
+
+    expect(checkpoint.attempts).toBe(3);
+    expect(checkpoint.inventoryAttempts).toBe(0);
+    expect(checkpoint.providerFailure).toBeUndefined();
+  });
+
   it("resets per-repository state after a manual project decision", async () => {
     const runner = new ReconciliationRunner(configuredOptions([]));
 
