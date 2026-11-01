@@ -1,0 +1,10 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "alchemy.run.ts",
+    "cloudflare.config.ts",
+    "src/index.ts",
+    "tests/**/*.test.ts"
+  ],
+  "project": ["{alchemy,scripts,src,tests}/**/*.ts", "*.ts"]
+}

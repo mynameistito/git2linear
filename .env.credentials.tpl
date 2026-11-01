@@ -1,0 +1,4 @@
+GITHUB_TOKEN=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/GITHUB_TOKEN
+LINEAR_API_KEY=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_API_KEY
+MANUAL_TRIGGER_TOKEN=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/MANUAL_TRIGGER_TOKEN
+CLOUDFLARE_API_TOKEN=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/CLOUDFLARE_API_TOKEN
