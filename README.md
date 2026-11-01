@@ -1,7 +1,7 @@
 <h1>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/gitline-logo-dark.svg">
-    <img src="docs/assets/gitline-logo.svg" alt="" width="64" height="64" align="absmiddle">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/gitline-logo-white.png">
+    <img src="docs/assets/gitline-logo-dark.png" alt="" width="64" height="64" align="absmiddle">
   </picture>
   Gitline
 </h1>
