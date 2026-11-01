@@ -85,6 +85,7 @@ export interface NativeOptions {
   store: NativeStore;
   owner: string;
   teamId: string;
+  teamKey: string;
   endpoint?: string;
 }
 
@@ -188,6 +189,7 @@ const result = <T>(
  * @param store - Persistence operations.
  * @param owner - GitHub owner.
  * @param teamId - Linear team.
+ * @param teamKey - Expected Linear team key.
  * @param endpoint - Native webhook endpoint.
  * @returns Native dependencies.
  */
@@ -197,6 +199,7 @@ export const nativeOptions = (
   store: NativeStore,
   owner: string,
   teamId: string,
+  teamKey: string,
   endpoint?: string
 ): NativeOptions => ({
   endpoint,
@@ -218,6 +221,7 @@ export const nativeOptions = (
   owner,
   store,
   teamId,
+  teamKey,
 });
 
 /** Adapt durable storage.

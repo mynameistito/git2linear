@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ReconciliationRunner } from "../../src/application/runner";
@@ -7,8 +7,10 @@ import type {
   RepositoryStatus,
   RunnerOptions,
 } from "../../src/application/runner";
+import { CheckpointSchema } from "../../src/application/runner-adapters";
 import type { Project } from "../../src/domain/reconciliation";
 import type { StepOutput } from "../../src/platform/run";
+import { emptySummary } from "../../src/platform/run";
 
 const configuredOptions = (records: RepositoryStatus[]): RunnerOptions => ({
   endpoint: "https://native.example",
@@ -126,6 +128,7 @@ const configuredOptions = (records: RepositoryStatus[]): RunnerOptions => ({
     },
   },
   teamId: "team",
+  teamKey: "MY",
 });
 
 const runSteps = async (
@@ -170,6 +173,74 @@ const withoutEndpoint = ({
 };
 
 describe("reconciliation runner regressions", () => {
+  it("resets per-repository state after a manual project decision", async () => {
+    const runner = new ReconciliationRunner(configuredOptions([]));
+
+    const result = await runner.step({
+      checkpoint: {
+        attempts: 2,
+        change: "created",
+        cursor: null,
+        index: 0,
+        page: 1,
+        phase: "reconcile",
+        projects: [
+          {
+            archived: false,
+            id: "p1",
+            name: "repo",
+            teamIds: ["team"],
+            urls: [],
+          },
+          {
+            archived: false,
+            id: "p2",
+            name: "repo",
+            teamIds: ["team"],
+            urls: [],
+          },
+        ],
+        repositories: [
+          {
+            archived: false,
+            disabled: false,
+            id: 1,
+            name: "repo",
+            owner: "owner",
+            url: "https://github.com/owner/repo",
+          },
+        ],
+        summary: emptySummary(),
+      },
+      dryRun: false,
+      runId: "manual-state",
+    });
+
+    const checkpoint = Schema.decodeUnknownSync(CheckpointSchema)(
+      result.checkpoint
+    );
+
+    expect(checkpoint.index).toBe(1);
+    expect(checkpoint.attempts).toBe(0);
+    expect(checkpoint.change).toBe("none");
+    expect(result.summary.created).toBe(0);
+  });
+
+  it("verifies the configured team key before applying a project", async () => {
+    const options = configuredOptions([]);
+    let verified = false;
+    options.linear.verifyTeam = async (id, key) => {
+      expect(id).toBe("team");
+      expect(key).toBe("CUSTOM");
+      verified = true;
+
+      return await Promise.resolve({ ok: true, value: true });
+    };
+
+    await finish({ ...options, teamKey: "CUSTOM" });
+    expect(verified).toBeTruthy();
+  });
+
   it("dry run discovers and plans without external mutations or identity writes", async () => {
     const repo = {
       archived: false,
@@ -268,6 +339,7 @@ describe("reconciliation runner regressions", () => {
       owner: "owner",
       store,
       teamId: "team",
+      teamKey: "MY",
     };
 
     const runner = new ReconciliationRunner(options);
@@ -402,6 +474,7 @@ describe("reconciliation runner regressions", () => {
       owner: "owner",
       store,
       teamId: "team",
+      teamKey: "MY",
     });
 
     const result = await runSteps(runner, false, "run", 15);

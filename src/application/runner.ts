@@ -105,6 +105,7 @@ export interface RunnerOptions {
   readonly store: ReconciliationStore;
   readonly owner: string;
   readonly teamId: string;
+  readonly teamKey: string;
   readonly endpoint?: string;
 }
 
@@ -336,8 +337,6 @@ export class ReconciliationRunner implements StepRunner {
         state.index += 1;
         state.attempts = 0;
         state.change = "none";
-        state.attempts = 0;
-        state.change = "none";
 
         return ReconciliationRunner.#output(state);
       }
@@ -366,6 +365,9 @@ export class ReconciliationRunner implements StepRunner {
         }
 
         state.index += 1;
+
+        state.attempts = 0;
+        state.change = "none";
 
         return ReconciliationRunner.#output(state);
       }
@@ -456,7 +458,11 @@ export class ReconciliationRunner implements StepRunner {
       hookPlan: ActionHook
     ) {
       const { linear, store } = this.#options;
-      const team = yield* linear.verifyTeam(this.#options.teamId, "MY");
+
+      const team = yield* linear.verifyTeam(
+        this.#options.teamId,
+        this.#options.teamKey
+      );
 
       if (!team.ok) {
         return yield* this.#retry(state, team.error);
@@ -716,6 +722,7 @@ export const createRunner = (
       nativePersistenceService(storage),
       env.GITHUB_OWNER,
       env.LINEAR_TEAM_ID,
+      env.LINEAR_TEAM_KEY,
       env.LINEAR_WEBHOOK_URL
     )
   );
