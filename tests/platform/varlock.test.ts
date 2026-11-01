@@ -49,11 +49,13 @@ describe("Varlock deployment schema", () => {
     { LINEAR_TEAM_ID: "invalid" },
   ])("fails closed without exposing credentials %#", (overrides) => {
     const values = { ...base, ...overrides };
+
     const result = run(values);
 
     expect(result.status).not.toBe(0);
 
     const output = result.stdout + result.stderr;
+
     const leakedCredentials = [
       values.GITHUB_TOKEN,
       values.LINEAR_API_KEY,
