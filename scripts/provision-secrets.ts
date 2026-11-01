@@ -48,6 +48,10 @@ const provision = Effect.fn("Secrets.provision")(function* provision() {
     yield* Effect.fail(invalidConfig);
   }
 
+  if (Redacted.value(manual).length < 43) {
+    yield* Effect.fail(invalidConfig);
+  }
+
   if (Option.isSome(webhookUrl) && Option.isSome(webhookSecret)) {
     const address = yield* Effect.try({
       catch: () => invalidConfig,

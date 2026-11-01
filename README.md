@@ -65,10 +65,12 @@ Required runtime bindings are `GITHUB_TOKEN`, `LINEAR_API_KEY`, and `MANUAL_TRIG
 ```powershell
 $env:CLOUDFLARE_ACCOUNT_ID = '<confirmed account ID>'
 $env:CLOUDFLARE_WORKER_NAME = 'git2linear'
-2password run --env 'CLOUDFLARE_API_TOKEN=op://github-actions/<Cloudflare item>/credential' --env 'GITHUB_TOKEN=op://github-actions/<GitHub item>/credential' --env 'LINEAR_API_KEY=op://github-actions/<Linear item>/credential' --env 'LINEAR_WEBHOOK_URL=op://github-actions/<Endpoint item>/credential' --env 'LINEAR_WEBHOOK_SECRET=op://github-actions/<Signing item>/credential' --env 'MANUAL_TRIGGER_TOKEN=op://github-actions/<Manual item>/credential' -- bun scripts/provision-secrets.ts
+2password run --env 'CLOUDFLARE_API_TOKEN=op://github-actions/<Cloudflare item>/credential' --env 'GITHUB_TOKEN=op://github-actions/<GitHub item>/credential' --env 'LINEAR_API_KEY=op://github-actions/<Linear item>/credential' --env 'MANUAL_TRIGGER_TOKEN=op://github-actions/<Manual item>/credential' -- bun scripts/provision-secrets.ts
 ```
 
 Replace placeholders with verified saved references. Cloudflare API calls preserve unrelated bindings. If interrupted, inspect binding metadata and provision missing values; secret provisioning success does not prove external APIs accept the credentials.
+
+This command provisions the three core runtime secrets without resolving optional webhook items. When the verified native endpoint and replacement signing secret are both available, add both `--env 'LINEAR_WEBHOOK_URL=op://github-actions/<Endpoint item>/credential'` and `--env 'LINEAR_WEBHOOK_SECRET=op://github-actions/<Signing item>/credential'` before `-- bun scripts/provision-secrets.ts`. A single optional value is rejected. The manual trigger token must contain at least 43 characters; generate it from 32 cryptographically random bytes.
 
 ## Manual operations
 
@@ -95,6 +97,8 @@ Renew the GitHub token before 2026-12-01 through GitHub's fine-grained token UI 
 Provider outages and rate limits retain checkpoints and use bounded retry timing. Per-repository failures do not stop other repositories. A repeatedly failing global step enters failed state; fix credentials/configuration and start another dry run. Repository detail retention keeps the current and previous run. Existing alarms scan at most 100 internal report keys per maintenance batch with a durable cursor, pruning older report sets after interrupted work resumes. Stable repository identities and operation intents are retained. Provider retry deadlines remain unchanged during active runs. Preserve the Durable Object namespace when redeploying. Ambiguous projects or duplicate matching hooks require inspection, not automatic deletion. Archived/disabled repositories are reported and never unarchived. A repository invisible to the credential cannot be inferred from a successful partial inventory; compare selected-repository coverage when troubleshooting missing private repositories.
 
 To disable mutations, redeploy with `APPLY_ENABLED=false`. To stop all scheduled work, remove the scheduled trigger and deploy the reviewed configuration. Rolling back code does not roll back project/hook changes or durable state. Do not delete the namespace as a recovery shortcut.
+
+Project inventory currently reads at most 10 teams and 10 external links per project. If either nested connection has more pages, the inventory fails closed before reconciliation, including for unrelated projects. Inspect projects with more than 10 entries when a global inventory step repeatedly reports an invalid response. Preserve their configuration and extend the adapter with supported nested pagination before resuming; do not delete links or teams to work around this limit. Regression tests cover both overflow cases.
 
 ## References
 
