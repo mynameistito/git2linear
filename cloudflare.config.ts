@@ -1,7 +1,7 @@
 import { bindings, defineConfig, exports, triggers } from "cf/config";
 import { Config, Effect } from "effect";
 
-import { teamIdConfig } from "./src/platform/deployment.ts";
+import { teamIdConfig, workerIdentity } from "./src/platform/deployment.ts";
 
 const deployment = Effect.runSync(
   Config.all({
@@ -22,23 +22,23 @@ if (!deployment.bootstrap) {
 }
 
 export default defineConfig({
-  accountId: "402722ab1f598e783cd6dcdedc37e1d0",
+  accountId: workerIdentity.accountId,
   worker: {
-    compatibilityDate: "2026-10-31",
+    compatibilityDate: workerIdentity.compatibilityDate,
     entrypoint: "src/index.ts",
     env: {
       APPLY_ENABLED: bindings.text(String(deployment.applyEnabled)),
-      GITHUB_OWNER: bindings.text("mynameistito"),
+      GITHUB_OWNER: bindings.text(workerIdentity.owner),
       LINEAR_TEAM_ID: bindings.text(deployment.teamId),
-      LINEAR_TEAM_KEY: bindings.text("MY"),
+      LINEAR_TEAM_KEY: bindings.text(workerIdentity.teamKey),
       RECONCILER: bindings.durableObject({
         exportName: "Reconciler",
-        worker: "git2linear",
+        worker: workerIdentity.name,
       }),
       ...secretBindings,
     },
     exports: { Reconciler: exports.durableObject({ storage: "sqlite" }) },
-    name: "git2linear",
-    triggers: [triggers.scheduled({ schedule: "0 * * * *" })],
+    name: workerIdentity.name,
+    triggers: [triggers.scheduled({ schedule: workerIdentity.cron })],
   },
 });

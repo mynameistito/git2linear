@@ -8,16 +8,17 @@ import { AdoptPolicy, localState, Stack } from "alchemy";
 import { Effect } from "effect";
 
 import { deploymentConfig } from "./alchemy/deployment";
+import { workerIdentity } from "./src/platform/deployment.ts";
 
 export default Stack(
-  "git2linear",
+  workerIdentity.name,
   { providers: providers(), state: localState() },
   Effect.gen(function* stack() {
     const config = yield* deploymentConfig;
 
     const account = yield* CloudflareEnvironment.current;
 
-    if (account.accountId !== "402722ab1f598e783cd6dcdedc37e1d0") {
+    if (account.accountId !== workerIdentity.accountId) {
       return yield* Effect.die("Cloudflare account does not match git2linear");
     }
 
@@ -30,15 +31,15 @@ export default Stack(
           };
 
     const worker = yield* Worker("Worker", {
-      compatibility: { date: "2026-10-31" },
-      crons: ["0 * * * *"],
+      compatibility: { date: workerIdentity.compatibilityDate },
+      crons: [workerIdentity.cron],
       env: {
         APPLY_ENABLED: String(config.applyEnabled),
-        GITHUB_OWNER: "mynameistito",
+        GITHUB_OWNER: workerIdentity.owner,
         GITHUB_TOKEN: config.githubToken,
         LINEAR_API_KEY: config.linearApiKey,
         LINEAR_TEAM_ID: config.teamId,
-        LINEAR_TEAM_KEY: "MY",
+        LINEAR_TEAM_KEY: workerIdentity.teamKey,
         MANUAL_TRIGGER_TOKEN: config.manualTriggerToken,
         RECONCILER: DurableObject("Reconciler", {
           storage: "sqlite",
@@ -46,7 +47,7 @@ export default Stack(
         ...webhookBindings,
       },
       main: "./src/index.ts",
-      name: "git2linear",
+      name: workerIdentity.name,
     }).pipe(AdoptPolicy.adopt(true));
 
     return { url: worker.url };
