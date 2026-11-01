@@ -1,5 +1,12 @@
-/* oxlint-disable sonarjs/no-duplicate-string, sonarjs/max-union-size -- Operational status variants remain explicit for exhaustive consumers. */
-import type { Identity, Project, Repository } from "../domain/reconciliation";
+import { Context, Effect, Layer, Schema } from "effect";
+
+import type {
+  HookPlan,
+  Identity,
+  Project,
+  ProjectPlan,
+  Repository,
+} from "../domain/reconciliation";
 import { planHook, planProject } from "../domain/reconciliation";
 import type { Env } from "../platform/env";
 import { emptySummary } from "../platform/run";
@@ -12,6 +19,25 @@ import type {
 import { GitHubClient } from "../providers/github";
 import type { ProviderFailure } from "../providers/http";
 import { LinearProjects } from "../providers/linear";
+import type { PersistenceError } from "./persistence-error";
+import {
+  adaptLegacy,
+  CheckpointSchema,
+  nativeOptions,
+  nativePersistenceService,
+  ReconciliationError,
+} from "./runner-adapters";
+import type { NativeOptions } from "./runner-adapters";
+
+export {
+  nativePersistenceService,
+  PersistenceService,
+  persistenceLayer,
+} from "./runner-adapters";
+
+export { PersistenceError } from "./persistence-error";
+
+export { ReconciliationError } from "./reconciliation-error";
 
 /** Storage survives runs; identity and intent writes precede provider mutation. */
 export interface ReconciliationStore {
@@ -27,14 +53,15 @@ export interface ReconciliationStore {
   ) => Promise<void>;
 }
 
+type SuccessfulOutcome = "already-configured" | "created" | "repaired";
+
+type OtherOutcome = "skipped" | "failed";
+
+const notRequested = "not-requested";
+
 /** Safe repository status never includes native endpoint or provider payloads. */
 export interface RepositoryStatus {
-  readonly outcome:
-    | "already-configured"
-    | "created"
-    | "repaired"
-    | "skipped"
-    | "failed";
+  readonly outcome: SuccessfulOutcome | OtherOutcome;
   readonly runId?: string;
   readonly dryRun?: boolean;
   readonly plannedActions?: readonly string[];
@@ -81,16 +108,33 @@ export interface RunnerOptions {
   readonly endpoint?: string;
 }
 
+type ActionPlan = Extract<ProjectPlan, { kind: "create" | "reuse" }>;
+
+type ActionHook =
+  | HookPlan
+  | {
+      readonly kind: "manual";
+      readonly reason: "commit-webhook-credentials-unavailable";
+    };
+
 /** Each step handles one inventory page or one repository, with bounded durable retry. */
 export class ReconciliationRunner implements StepRunner {
-  readonly #options: RunnerOptions;
+  readonly #options: NativeOptions;
   #runId = "";
   #dryRun = true;
   /** Construct a runner from application-owned ports.
    * @param options - Provider and durable persistence dependencies.
    */
-  constructor(options: RunnerOptions) {
-    this.#options = options;
+  constructor(options: RunnerOptions | { native: NativeOptions }) {
+    this.#options = "native" in options ? options.native : adaptLegacy(options);
+  }
+
+  /** Construct a runner from native ports.
+   * @param options - Native dependencies.
+   * @returns A runner.
+   */
+  static fromNative(options: NativeOptions): ReconciliationRunner {
+    return new ReconciliationRunner({ native: options });
   }
 
   /** Advance a durable reconciliation by one bounded unit.
@@ -98,216 +142,267 @@ export class ReconciliationRunner implements StepRunner {
    * @returns The next checkpoint and verified status counters.
    */
   async step(input: StepInput): Promise<StepOutput> {
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: This private checkpoint is produced exclusively by this runner and stored by the trusted coordinator; callers cannot submit checkpoints over HTTP.
-    const checkpoint = input.checkpoint as Checkpoint | null;
-    this.#runId = input.runId;
-    this.#dryRun = input.dryRun;
-
-    const state: Checkpoint = checkpoint ?? {
-      attempts: 0,
-      change: "none",
-      cursor: null,
-      index: 0,
-      page: 1,
-      phase: "repositories",
-      projects: [],
-      repositories: [],
-      summary: emptySummary(),
-    };
-
-    if (state.phase === "repositories") {
-      const result = await this.#options.github.listRepositoryPage(state.page);
-
-      if (!result.ok) {
-        return await this.#retry(state, result.error);
-      }
-
-      const seen = new Set(state.repositories.map((repo) => repo.id));
-      state.repositories.push(
-        ...result.value.repositories.filter((repo) => !seen.has(repo.id))
-      );
-      state.summary.discovered = state.repositories.length;
-      state.page += 1;
-      state.attempts = 0;
-      state.change = "none";
-
-      if (!result.value.hasNextPage) {
-        state.phase = "projects";
-      }
-
-      return ReconciliationRunner.#output(state);
-    }
-
-    if (state.phase === "projects") {
-      const result = await this.#options.linear.page(state.cursor);
-
-      if (!result.ok) {
-        return await this.#retry(state, result.error);
-      }
-
-      state.projects.push(...result.value.projects);
-      state.cursor = result.value.nextCursor;
-
-      if (state.cursor === null) {
-        state.phase = "reconcile";
-      }
-
-      return ReconciliationRunner.#output(state);
-    }
-
-    const repository = state.repositories[state.index];
-
-    if (!repository) {
-      return ReconciliationRunner.#output(state, true);
-    }
-
-    return await this.#repository(state, repository, input.dryRun);
+    return await Effect.runPromise(this.stepEffect(input));
   }
+
+  stepEffect = (input: StepInput) =>
+    new ReconciliationRunner({ native: this.#options }).#execute(input);
+
+  readonly #execute = Effect.fn("Reconciliation.step")(
+    function* stepEffect(this: ReconciliationRunner, input: StepInput) {
+      const checkpoint =
+        input.checkpoint === null
+          ? null
+          : yield* Schema.decodeUnknownEffect(CheckpointSchema)(
+              input.checkpoint
+            ).pipe(
+              Effect.mapError(
+                () =>
+                  new ReconciliationError({ operation: "decode-checkpoint" })
+              )
+            );
+
+      this.#runId = input.runId;
+      this.#dryRun = input.dryRun;
+
+      const state: Checkpoint = checkpoint ?? {
+        attempts: 0,
+        change: "none",
+        cursor: null,
+        index: 0,
+        page: 1,
+        phase: "repositories",
+        projects: [],
+        repositories: [],
+        summary: emptySummary(),
+      };
+
+      if (state.phase === "repositories") {
+        const result = yield* this.#options.github.listRepositoryPage(
+          state.page
+        );
+
+        if (!result.ok) {
+          return yield* this.#retry(state, result.error);
+        }
+
+        const seen = new Set(state.repositories.map((repo) => repo.id));
+        state.repositories.push(
+          ...result.value.repositories.filter((repo) => !seen.has(repo.id))
+        );
+        state.summary.discovered = state.repositories.length;
+        state.page += 1;
+        state.attempts = 0;
+        state.change = "none";
+
+        if (!result.value.hasNextPage) {
+          state.phase = "projects";
+        }
+
+        return ReconciliationRunner.#output(state);
+      }
+
+      if (state.phase === "projects") {
+        const result = yield* this.#options.linear.page(state.cursor);
+
+        if (!result.ok) {
+          return yield* this.#retry(state, result.error);
+        }
+
+        state.projects.push(...result.value.projects);
+        state.cursor = result.value.nextCursor;
+
+        if (state.cursor === null) {
+          state.phase = "reconcile";
+        }
+
+        return ReconciliationRunner.#output(state);
+      }
+
+      const repository = state.repositories[state.index];
+
+      if (!repository) {
+        return ReconciliationRunner.#output(state, true);
+      }
+
+      return yield* this.#repository(state, repository, input.dryRun);
+    }.bind(this)
+  );
 
   static #output(state: Checkpoint, done = false): StepOutput {
     return { checkpoint: state, done, summary: state.summary };
   }
 
-  async #record(repositoryId: number, result: RepositoryStatus): Promise<void> {
-    await this.#options.store.record(repositoryId, {
-      ...result,
-      dryRun: this.#dryRun,
-      runId: this.#runId,
-    });
-  }
+  readonly #record = Effect.fn("Reconciliation.record")(
+    function* record(
+      this: ReconciliationRunner,
+      repositoryId: number,
+      result: RepositoryStatus
+    ) {
+      yield* this.#options.store.record(repositoryId, {
+        ...result,
+        dryRun: this.#dryRun,
+        runId: this.#runId,
+      });
+    }.bind(this)
+  );
 
-  async #retry(
-    state: Checkpoint,
-    failure: ProviderFailure
-  ): Promise<StepOutput> {
-    // Explicit projection: never persist a vendor exception, response, or request.
-    state.providerFailure = { kind: failure.kind };
+  readonly #retry = Effect.fn("Reconciliation.retry")(
+    function* retry(
+      this: ReconciliationRunner,
+      state: Checkpoint,
+      failure: ProviderFailure
+    ) {
+      // Explicit projection: never persist a vendor exception, response, or request.
+      state.providerFailure = { kind: failure.kind };
 
-    if (failure.reason !== undefined) {
-      state.providerFailure = {
-        ...state.providerFailure,
-        reason: failure.reason,
-      };
-    }
+      if (failure.reason !== undefined) {
+        state.providerFailure = {
+          ...state.providerFailure,
+          reason: failure.reason,
+        };
+      }
 
-    if (failure.status !== undefined) {
-      state.providerFailure = {
-        ...state.providerFailure,
-        status: failure.status,
-      };
-    }
+      if (failure.status !== undefined) {
+        state.providerFailure = {
+          ...state.providerFailure,
+          status: failure.status,
+        };
+      }
 
-    if (failure.retryAt !== undefined) {
-      state.providerFailure = {
-        ...state.providerFailure,
+      if (failure.retryAt !== undefined) {
+        state.providerFailure = {
+          ...state.providerFailure,
+          retryAt: failure.retryAt,
+        };
+      }
+
+      state.attempts += 1;
+
+      if (state.attempts >= 4 || failure.retryAt === undefined) {
+        if (state.phase !== "reconcile") {
+          return yield* Effect.fail(
+            new ReconciliationError({ operation: "inventory-unavailable" })
+          );
+        }
+
+        state.summary.failed += 1;
+        const repository = state.repositories[state.index];
+
+        if (repository) {
+          yield* this.#record(repository.id, {
+            manualActionRequired: true,
+            outcome: "failed",
+            ping: notRequested,
+            pushProcessing: "unverified",
+            reason: "provider-failure-or-retry-exhausted",
+          });
+        }
+
+        state.summary.manualActionRequired += 1;
+        state.index += 1;
+        state.attempts = 0;
+        state.change = "none";
+
+        return ReconciliationRunner.#output(state);
+      }
+
+      return {
+        ...ReconciliationRunner.#output(state),
         retryAt: failure.retryAt,
       };
-    }
+    }.bind(this)
+  );
 
-    state.attempts += 1;
+  readonly #repository = Effect.fn("Reconciliation.repository")(
+    function* reconcileRepository(
+      this: ReconciliationRunner,
+      state: Checkpoint,
+      repository: Repository,
+      dryRun: boolean
+    ) {
+      const { github, store } = this.#options;
 
-    if (state.attempts >= 4 || failure.retryAt === undefined) {
-      if (state.phase !== "reconcile") {
-        throw new Error("inventory-unavailable");
-      }
-
-      state.summary.failed += 1;
-      const repository = state.repositories[state.index];
-
-      if (repository) {
-        await this.#record(repository.id, {
+      if (state.attempts >= 4) {
+        yield* this.#record(repository.id, {
           manualActionRequired: true,
           outcome: "failed",
-          ping: "not-requested",
+          ping: notRequested,
           pushProcessing: "unverified",
-          reason: "provider-failure-or-retry-exhausted",
+          reason: "verification-or-retry-exhausted",
         });
-      }
-
-      state.summary.manualActionRequired += 1;
-      state.index += 1;
-      state.attempts = 0;
-      state.change = "none";
-
-      return ReconciliationRunner.#output(state);
-    }
-
-    return { ...ReconciliationRunner.#output(state), retryAt: failure.retryAt };
-  }
-
-  /* oxlint-disable eslint/complexity, sonarjs/cognitive-complexity -- Durable effect ordering is kept cohesive so each mutation is followed by verification before another mutation. */
-  async #repository(
-    state: Checkpoint,
-    repository: Repository,
-    dryRun: boolean
-  ): Promise<StepOutput> {
-    const { github, linear, store } = this.#options;
-
-    if (state.attempts >= 4) {
-      await this.#record(repository.id, {
-        manualActionRequired: true,
-        outcome: "failed",
-        ping: "not-requested",
-        pushProcessing: "unverified",
-        reason: "verification-or-retry-exhausted",
-      });
-      state.summary.failed += 1;
-      state.summary.manualActionRequired += 1;
-      state.index += 1;
-      state.attempts = 0;
-      state.change = "none";
-      state.attempts = 0;
-      state.change = "none";
-
-      return ReconciliationRunner.#output(state);
-    }
-
-    const plan = planProject({
-      identities: await store.identities(),
-      owner: this.#options.owner,
-      projects: state.projects,
-      repository,
-      teamId: this.#options.teamId,
-    });
-
-    if (plan.kind === "skip" || plan.kind === "manual") {
-      await this.#record(repository.id, {
-        manualActionRequired: true,
-        outcome: "skipped",
-        ping: "not-requested",
-        pushProcessing: "unverified",
-        reason: plan.reason,
-      });
-
-      if (plan.kind === "skip") {
-        state.summary.skipped += 1;
-      } else {
+        state.summary.failed += 1;
         state.summary.manualActionRequired += 1;
+        state.index += 1;
+        state.attempts = 0;
+        state.change = "none";
+        state.attempts = 0;
+        state.change = "none";
+
+        return ReconciliationRunner.#output(state);
       }
 
-      state.index += 1;
+      const plan = planProject({
+        identities: yield* store.identities(),
+        owner: this.#options.owner,
+        projects: state.projects,
+        repository,
+        teamId: this.#options.teamId,
+      });
 
-      return ReconciliationRunner.#output(state);
-    }
+      if (plan.kind === "skip" || plan.kind === "manual") {
+        yield* this.#record(repository.id, {
+          manualActionRequired: true,
+          outcome: "skipped",
+          ping: notRequested,
+          pushProcessing: "unverified",
+          reason: plan.reason,
+        });
 
-    const hooks =
-      this.#options.endpoint === undefined
-        ? { ok: true as const, value: [] }
-        : await github.listHooks(repository);
+        if (plan.kind === "skip") {
+          state.summary.skipped += 1;
+        } else {
+          state.summary.manualActionRequired += 1;
+        }
 
-    if (!hooks.ok) {
-      return await this.#retry(state, hooks.error);
-    }
+        state.index += 1;
 
-    const hookPlan =
-      this.#options.endpoint === undefined
-        ? {
-            kind: "manual" as const,
-            reason: "commit-webhook-credentials-unavailable" as const,
-          }
-        : planHook(hooks.value, this.#options.endpoint);
+        return ReconciliationRunner.#output(state);
+      }
 
-    if (dryRun) {
+      const hooks =
+        this.#options.endpoint === undefined
+          ? { ok: true as const, value: [] }
+          : yield* github.listHooks(repository);
+
+      if (!hooks.ok) {
+        return yield* this.#retry(state, hooks.error);
+      }
+
+      const hookPlan =
+        this.#options.endpoint === undefined
+          ? {
+              kind: "manual" as const,
+              reason: "commit-webhook-credentials-unavailable" as const,
+            }
+          : planHook(hooks.value, this.#options.endpoint);
+
+      if (dryRun) {
+        return yield* this.#dryPlan(state, repository, plan, hookPlan);
+      }
+
+      return yield* this.#applyProject(state, repository, plan, hookPlan);
+    }.bind(this)
+  );
+
+  readonly #dryPlan = Effect.fn("Reconciliation.dryPlan")(
+    function* dryPlan(
+      this: ReconciliationRunner,
+      state: Checkpoint,
+      repository: Repository,
+      plan: ActionPlan,
+      hookPlan: ActionHook
+    ) {
       const plannedActions = [
         `project:${plan.kind}`,
         `hook:${hookPlan.kind}`,
@@ -322,10 +417,10 @@ export class ReconciliationRunner implements StepRunner {
         plannedActions.push("project:attach-repository-url");
       }
 
-      await this.#record(repository.id, {
+      yield* this.#record(repository.id, {
         manualActionRequired: true,
         outcome: "skipped",
-        ping: "not-requested",
+        ping: notRequested,
         plannedActions,
         pushProcessing: "unverified",
         reason: hookPlan.kind === "manual" ? hookPlan.reason : "dry-run-plan",
@@ -349,106 +444,221 @@ export class ReconciliationRunner implements StepRunner {
       state.change = "none";
 
       return ReconciliationRunner.#output(state);
-    }
+    }.bind(this)
+  );
 
-    const team = await linear.verifyTeam(this.#options.teamId, "MY");
+  readonly #applyProject = Effect.fn("Reconciliation.applyProject")(
+    function* applyProject(
+      this: ReconciliationRunner,
+      state: Checkpoint,
+      repository: Repository,
+      plan: ActionPlan,
+      hookPlan: ActionHook
+    ) {
+      const { linear, store } = this.#options;
+      const team = yield* linear.verifyTeam(this.#options.teamId, "MY");
 
-    if (!team.ok) {
-      return await this.#retry(state, team.error);
-    }
-
-    if (!team.value) {
-      return await this.#retry(state, { kind: "invalid-response" });
-    }
-
-    const projectId =
-      plan.kind === "create"
-        ? await store.intent(repository.id, "project")
-        : plan.projectId;
-
-    let changed = false;
-
-    if (plan.kind === "create") {
-      state.attempts += 1;
-
-      const created = await linear.create({
-        id: projectId,
-        name: repository.name,
-        repositoryUrl: repository.url,
-        teamId: this.#options.teamId,
-      });
-
-      state.change = "created";
-
-      if (!created.ok) {
-        return ReconciliationRunner.#refresh(state, created.error);
+      if (!team.ok) {
+        return yield* this.#retry(state, team.error);
       }
 
-      changed = true;
-    } else if (plan.updateName !== null) {
-      state.attempts += 1;
-      const renamed = await linear.rename(projectId, plan.updateName);
-
-      if (state.change === "none") {
-        state.change = "repaired";
+      if (!team.value) {
+        return yield* this.#retry(state, { kind: "invalid-response" });
       }
 
-      if (!renamed.ok) {
-        return ReconciliationRunner.#refresh(state, renamed.error);
+      const projectId =
+        plan.kind === "create"
+          ? yield* store.intent(repository.id, "project")
+          : plan.projectId;
+
+      let changed = false;
+
+      if (plan.kind === "create") {
+        state.attempts += 1;
+
+        const created = yield* linear.create({
+          id: projectId,
+          name: repository.name,
+          repositoryUrl: repository.url,
+          teamId: this.#options.teamId,
+        });
+
+        state.change = "created";
+
+        if (!created.ok) {
+          return ReconciliationRunner.#refresh(state, created.error);
+        }
+
+        changed = true;
+      } else if (plan.updateName !== null) {
+        state.attempts += 1;
+        const renamed = yield* linear.rename(projectId, plan.updateName);
+
+        if (state.change === "none") {
+          state.change = "repaired";
+        }
+
+        if (!renamed.ok) {
+          return ReconciliationRunner.#refresh(state, renamed.error);
+        }
+
+        changed = true;
       }
 
-      changed = true;
-    }
+      // Re-read all project pages before counting any project mutation as successful.
+      if (changed) {
+        state.phase = "projects";
+        state.projects = [];
+        state.cursor = null;
 
-    // Re-read all project pages before counting any project mutation as successful.
-    if (changed) {
-      state.phase = "projects";
-      state.projects = [];
-      state.cursor = null;
+        return ReconciliationRunner.#output(state);
+      }
 
-      return ReconciliationRunner.#output(state);
-    }
+      if (plan.kind === "reuse" && plan.attachUrl !== null) {
+        state.attempts += 1;
 
-    if (plan.kind === "reuse" && plan.attachUrl !== null) {
-      state.attempts += 1;
+        const attached = yield* linear.attach({
+          id: yield* store.intent(repository.id, "link"),
+          projectId,
+          url: repository.url,
+        });
 
-      const attached = await linear.attach({
-        id: await store.intent(repository.id, "link"),
+        if (state.change === "none") {
+          state.change = "repaired";
+        }
+
+        if (!attached.ok) {
+          return ReconciliationRunner.#refresh(state, attached.error);
+        }
+
+        state.phase = "projects";
+        state.projects = [];
+        state.cursor = null;
+
+        return ReconciliationRunner.#output(state);
+      }
+
+      yield* store.saveIdentity({
         projectId,
-        url: repository.url,
+        repositoryId: repository.id,
+        repositoryUrl: repository.url,
       });
 
-      if (state.change === "none") {
-        state.change = "repaired";
+      return yield* this.#applyHook(state, repository, hookPlan);
+    }.bind(this)
+  );
+
+  readonly #applyHook = Effect.fn("Reconciliation.applyHook")(
+    function* applyHook(
+      this: ReconciliationRunner,
+      state: Checkpoint,
+      repository: Repository,
+      hookPlan: ActionHook
+    ) {
+      const { github } = this.#options;
+
+      if (hookPlan.kind === "manual") {
+        const projectOutcome =
+          state.change === "none" ? "already-configured" : state.change;
+
+        yield* this.#record(repository.id, {
+          manualActionRequired: true,
+          outcome: projectOutcome,
+          ping: notRequested,
+          pushProcessing: "unverified",
+          reason: hookPlan.reason,
+          supportedStateVerified: true,
+        });
+
+        if (state.change === "none") {
+          state.summary.alreadyConfigured += 1;
+        } else {
+          state.summary[state.change] += 1;
+        }
+
+        state.summary.manualActionRequired += 1;
+        state.index += 1;
+        state.attempts = 0;
+        state.change = "none";
+
+        return ReconciliationRunner.#output(state);
       }
 
-      if (!attached.ok) {
-        return ReconciliationRunner.#refresh(state, attached.error);
+      if (hookPlan.kind !== "reuse") {
+        state.attempts += 1;
+
+        const mutation =
+          hookPlan.kind === "create"
+            ? yield* github.createHook(repository)
+            : yield* github.repairHook(repository, hookPlan.hookId);
+
+        if (state.change === "none") {
+          state.change = hookPlan.kind === "create" ? "created" : "repaired";
+        }
+
+        if (!mutation.ok && mutation.error.retryAt !== undefined) {
+          return {
+            ...ReconciliationRunner.#output(state),
+            retryAt: mutation.error.retryAt,
+          };
+        }
+
+        // Next durable step rediscovers hooks, including recovery after interrupted creation.
+        return ReconciliationRunner.#output(state);
       }
 
-      state.phase = "projects";
-      state.projects = [];
-      state.cursor = null;
+      return yield* this.#verifyHook(state, repository, hookPlan.hookId);
+    }.bind(this)
+  );
 
-      return ReconciliationRunner.#output(state);
-    }
+  readonly #verifyHook = Effect.fn("Reconciliation.verifyHook")(
+    function* verifyHook(
+      this: ReconciliationRunner,
+      state: Checkpoint,
+      repository: Repository,
+      hookId: number
+    ) {
+      const { github } = this.#options;
+      const baseline = yield* github.deliveries(repository, hookId);
 
-    await store.saveIdentity({
-      projectId,
-      repositoryId: repository.id,
-      repositoryUrl: repository.url,
-    });
+      const previousIds = new Set(
+        baseline.ok ? baseline.value.map((entry) => entry.id) : []
+      );
 
-    if (hookPlan.kind === "manual") {
-      const projectOutcome =
+      const ping = yield* github.pingHook(repository, hookId);
+      const deliveries = yield* github.deliveries(repository, hookId);
+
+      const delivery = deliveries.ok
+        ? deliveries.value.find(
+            (entry) =>
+              baseline.ok &&
+              ping.ok &&
+              entry.event === "ping" &&
+              !previousIds.has(entry.id)
+          )
+        : undefined;
+
+      let pingDelivery: "verified" | "failed" | "pending" = "pending";
+
+      if (delivery?.statusCode !== null && delivery?.statusCode !== undefined) {
+        pingDelivery =
+          delivery.statusCode >= 200 && delivery.statusCode < 300
+            ? "verified"
+            : "failed";
+      }
+
+      const outcome =
         state.change === "none" ? "already-configured" : state.change;
 
-      await this.#record(repository.id, {
+      yield* this.#record(repository.id, {
+        hookId,
         manualActionRequired: true,
-        outcome: projectOutcome,
-        ping: "not-requested",
+        outcome,
+        ping: ping.ok ? "accepted" : "failed",
+        pingDelivery,
         pushProcessing: "unverified",
-        reason: hookPlan.reason,
+        reason:
+          "native-sync-configuration-and-project-routing-require-supported-api",
         supportedStateVerified: true,
       });
 
@@ -464,84 +674,8 @@ export class ReconciliationRunner implements StepRunner {
       state.change = "none";
 
       return ReconciliationRunner.#output(state);
-    }
-
-    if (hookPlan.kind !== "reuse") {
-      state.attempts += 1;
-
-      const mutation =
-        hookPlan.kind === "create"
-          ? await github.createHook(repository)
-          : await github.repairHook(repository, hookPlan.hookId);
-
-      if (state.change === "none") {
-        state.change = hookPlan.kind === "create" ? "created" : "repaired";
-      }
-
-      if (!mutation.ok) {
-        return await this.#retry(state, mutation.error);
-      }
-
-      // Next durable step rediscovers hooks, including recovery after interrupted creation.
-      return ReconciliationRunner.#output(state);
-    }
-
-    const baseline = await github.deliveries(repository, hookPlan.hookId);
-
-    const previousIds = new Set(
-      baseline.ok ? baseline.value.map((entry) => entry.id) : []
-    );
-
-    const ping = await github.pingHook(repository, hookPlan.hookId);
-    const deliveries = await github.deliveries(repository, hookPlan.hookId);
-
-    const delivery = deliveries.ok
-      ? deliveries.value.find(
-          (entry) =>
-            baseline.ok &&
-            ping.ok &&
-            entry.event === "ping" &&
-            !previousIds.has(entry.id)
-        )
-      : undefined;
-
-    let pingDelivery: "verified" | "failed" | "pending" = "pending";
-
-    if (delivery?.statusCode !== null && delivery?.statusCode !== undefined) {
-      pingDelivery =
-        delivery.statusCode >= 200 && delivery.statusCode < 300
-          ? "verified"
-          : "failed";
-    }
-
-    const outcome =
-      state.change === "none" ? "already-configured" : state.change;
-
-    await this.#record(repository.id, {
-      hookId: hookPlan.hookId,
-      manualActionRequired: true,
-      outcome,
-      ping: ping.ok ? "accepted" : "failed",
-      pingDelivery,
-      pushProcessing: "unverified",
-      reason:
-        "native-sync-configuration-and-project-routing-require-supported-api",
-      supportedStateVerified: true,
-    });
-
-    if (state.change === "none") {
-      state.summary.alreadyConfigured += 1;
-    } else {
-      state.summary[state.change] += 1;
-    }
-
-    state.summary.manualActionRequired += 1;
-    state.index += 1;
-    state.attempts = 0;
-    state.change = "none";
-
-    return ReconciliationRunner.#output(state);
-  }
+    }.bind(this)
+  );
 
   static #refresh(state: Checkpoint, failure: ProviderFailure): StepOutput {
     // Even a rejected duplicate-id mutation can follow an earlier committed timeout.
@@ -557,53 +691,53 @@ export class ReconciliationRunner implements StepRunner {
   }
 }
 
-/** Wire deployment credentials and durable metadata without exposing secret values.
+/** Construct the production runner using native provider and durable storage effects.
  * @param env - Worker bindings.
- * @param storage - Durable Object storage.
- * @returns Bounded reconciliation runner.
+ * @param storage - Durable storage.
+ * @returns The native runner.
  */
 export const createRunner = (
   env: Env,
   storage: DurableObjectStorage
-): StepRunner => {
-  const store: ReconciliationStore = {
-    identities: async () => {
-      const identities = await storage.list<Identity>({ prefix: "identity:" });
-
-      return [...identities.values()];
-    },
-    intent: async (repositoryId, kind) => {
-      const key = `intent:${repositoryId}:${kind}`;
-      const existing = await storage.get<string>(key);
-
-      if (existing !== undefined) {
-        return existing;
-      }
-
-      const id = crypto.randomUUID();
-      await storage.put(key, id);
-
-      return id;
-    },
-    record: async (repositoryId, result) => {
-      await storage.put(`repository:${result.runId}:${repositoryId}`, result);
-    },
-    saveIdentity: async (identity) => {
-      await storage.put(`identity:${identity.repositoryId}`, identity);
-    },
-  };
-
-  return new ReconciliationRunner({
+): ReconciliationRunner => {
+  const github = new GitHubClient({
     endpoint: env.LINEAR_WEBHOOK_URL,
-    github: new GitHubClient({
-      endpoint: env.LINEAR_WEBHOOK_URL,
-      owner: env.GITHUB_OWNER,
-      token: env.GITHUB_TOKEN,
-      webhookSecret: env.LINEAR_WEBHOOK_SECRET,
-    }),
-    linear: new LinearProjects(env.LINEAR_API_KEY),
     owner: env.GITHUB_OWNER,
-    store,
-    teamId: env.LINEAR_TEAM_ID,
+    token: env.GITHUB_TOKEN,
+    webhookSecret: env.LINEAR_WEBHOOK_SECRET,
   });
+
+  const linear = new LinearProjects(env.LINEAR_API_KEY);
+
+  return ReconciliationRunner.fromNative(
+    nativeOptions(
+      github.effects,
+      linear.effects,
+      nativePersistenceService(storage),
+      env.GITHUB_OWNER,
+      env.LINEAR_TEAM_ID,
+      env.LINEAR_WEBHOOK_URL
+    )
+  );
 };
+
+/** Native reconciliation contract. */
+export interface ReconciliationOperations {
+  readonly stepEffect: (
+    input: StepInput
+  ) => Effect.Effect<StepOutput, ReconciliationError | PersistenceError>;
+}
+
+export const ReconciliationService = Context.Service<ReconciliationOperations>(
+  "git2linear/Reconciliation"
+);
+
+/** Provide the reconciliation contract.
+ * @param runner - Native runner.
+ * @returns Its service layer.
+ */
+export const reconciliationLayer = (runner: ReconciliationRunner) =>
+  Layer.effect(
+    ReconciliationService,
+    Effect.succeed(ReconciliationService.of({ stepEffect: runner.stepEffect }))
+  );
