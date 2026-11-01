@@ -1,113 +1,129 @@
-/* oxlint-disable eslint/no-await-in-loop, eslint/complexity, sonarjs/expression-complexity, anti-slop/no-runtime-typeof -- Sequential secret writes and explicit boundary envelope parsing. */
-const names = [
-  "GITHUB_TOKEN",
-  "LINEAR_API_KEY",
-  "MANUAL_TRIGGER_TOKEN",
-] as const;
+import { Config, Effect, Option, Redacted, Schema } from "effect";
 
-/** Provision only declared secrets, keeping values in memory and HTTPS request bodies. */
-const main = async (): Promise<void> => {
-  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const worker = process.env.CLOUDFLARE_WORKER_NAME ?? "git2linear";
-  const token = process.env.CLOUDFLARE_API_TOKEN;
-  const webhookNames = ["LINEAR_WEBHOOK_URL", "LINEAR_WEBHOOK_SECRET"] as const;
+import { readJsonEffect, requestEffect } from "../src/providers/http";
 
-  const suppliedWebhookNames = webhookNames.filter(
-    (name) => (process.env[name] ?? "") !== ""
+const taggedFailure = Schema.TaggedError;
+
+class ProvisionError extends taggedFailure<ProvisionError>()("ProvisionError", {
+  operation: Schema.Literals(["configuration", "response", "write"]),
+}) {}
+
+const invalidConfig = new ProvisionError({ operation: "configuration" });
+const { forEach: forEachEffect } = Effect;
+
+const responseSchema = Schema.Struct({ success: Schema.Boolean });
+
+const provision = Effect.fn("Secrets.provision")(function* provision() {
+  const account = yield* Config.String("CLOUDFLARE_ACCOUNT_ID");
+
+  const worker = yield* Config.String("CLOUDFLARE_WORKER_NAME").pipe(
+    Config.withDefault("git2linear")
   );
 
-  if (suppliedWebhookNames.length === 1) {
-    process.stderr.write(
-      "Native webhook credentials must be supplied together.\n"
-    );
-    process.exitCode = 1;
+  const token = yield* Config.Redacted("CLOUDFLARE_API_TOKEN");
+  const github = yield* Config.Redacted("GITHUB_TOKEN");
+  const linear = yield* Config.Redacted("LINEAR_API_KEY");
+  const manual = yield* Config.Redacted("MANUAL_TRIGGER_TOKEN");
 
-    return;
-  }
+  const webhookUrl = yield* Config.option(
+    Config.Redacted("LINEAR_WEBHOOK_URL")
+  );
 
-  if (suppliedWebhookNames.length === 2) {
-    const endpoint = new URL(process.env.LINEAR_WEBHOOK_URL ?? "");
+  const webhookSecret = yield* Config.option(
+    Config.Redacted("LINEAR_WEBHOOK_SECRET")
+  );
 
-    const validHost = ["api.linear.app", "linear.app"].includes(
-      endpoint.hostname
-    );
-
-    const validAddress =
-      endpoint.protocol === "https:" &&
-      endpoint.username === "" &&
-      endpoint.password === "";
-
-    if (!validHost || !validAddress || endpoint.hash !== "") {
-      process.stderr.write(
-        "Native endpoint must be a verified HTTPS Linear address.\n"
-      );
-      process.exitCode = 1;
-
-      return;
-    }
-  }
+  const secrets = [
+    { name: "GITHUB_TOKEN", value: Redacted.value(github) },
+    { name: "LINEAR_API_KEY", value: Redacted.value(linear) },
+    { name: "MANUAL_TRIGGER_TOKEN", value: Redacted.value(manual) },
+  ];
 
   if (
-    (account ?? "") === "" ||
-    !/^[a-f\d]{32}$/u.test(account ?? "") ||
+    !/^[a-f\d]{32}$/u.test(account) ||
     !/^[a-z\d-]+$/u.test(worker) ||
-    (token ?? "") === "" ||
-    names.some((name) => (process.env[name] ?? "") === "")
+    !Redacted.value(token) ||
+    secrets.some((secret) => !secret.value)
   ) {
-    process.stderr.write(
-      "Missing required deployment metadata or injected credentials.\n"
-    );
-    process.exitCode = 1;
-
-    return;
+    yield* Effect.fail(invalidConfig);
   }
 
-  for (const name of [...names, ...suppliedWebhookNames]) {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}/secrets`,
+  if (Option.isSome(webhookUrl) && Option.isSome(webhookSecret)) {
+    const address = yield* Effect.try({
+      catch: () => invalidConfig,
+      try: () => new URL(Redacted.value(webhookUrl.value)),
+    });
+
+    const invalidAddress = Boolean(
+      address.username || address.password || address.hash
+    );
+
+    if (
+      address.protocol !== "https:" ||
+      !["api.linear.app", "linear.app"].includes(address.hostname) ||
+      invalidAddress ||
+      !Redacted.value(webhookSecret.value)
+    ) {
+      yield* Effect.fail(invalidConfig);
+    }
+
+    secrets.push(
+      { name: "LINEAR_WEBHOOK_URL", value: Redacted.value(webhookUrl.value) },
       {
-        body: JSON.stringify({
-          name,
-          text: process.env[name],
-          type: "secret_text",
-        }),
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        method: "PUT",
-        redirect: "error",
-        signal: AbortSignal.timeout(30_000),
+        name: "LINEAR_WEBHOOK_SECRET",
+        value: Redacted.value(webhookSecret.value),
       }
     );
-
-    const body: unknown = await response.json();
-
-    // oxlint-disable-next-line sonarjs/expression-complexity, anti-slop/no-runtime-typeof -- Parse the API success envelope only.
-    const success =
-      response.ok &&
-      typeof body === "object" &&
-      body !== null &&
-      "success" in body &&
-      body.success === true;
-
-    process.stdout.write(
-      `${JSON.stringify({ binding: name, httpStatus: response.status, provisioned: success })}\n`
-    );
-
-    if (!success) {
-      process.exitCode = 1;
-
-      return;
-    }
+  } else if (Option.isSome(webhookUrl) || Option.isSome(webhookSecret)) {
+    yield* Effect.fail(invalidConfig);
   }
-};
 
-try {
-  await main();
-} catch (error: unknown) {
-  process.stderr.write(
-    `${JSON.stringify({ error: "provision-failed", kind: error instanceof Error ? error.name : "unknown" })}\n`
+  yield* forEachEffect(
+    secrets,
+    Effect.fn("Secrets.write")(function* write(secret) {
+      const response = yield* requestEffect(
+        `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}/secrets`,
+        {
+          body: JSON.stringify({
+            name: secret.name,
+            text: secret.value,
+            type: "secret_text",
+          }),
+          headers: {
+            Authorization: `Bearer ${Redacted.value(token)}`,
+            "Content-Type": "application/json",
+          },
+          method: "PUT",
+        },
+        {}
+      );
+
+      const body = yield* readJsonEffect(response);
+      const result = yield* Schema.decodeUnknownEffect(responseSchema)(
+        body
+      ).pipe(
+        Effect.mapError(() => new ProvisionError({ operation: "response" }))
+      );
+
+      process.stdout.write(
+        `${JSON.stringify({ binding: secret.name, httpStatus: response.status, provisioned: result.success })}\n`
+      );
+
+      if (!result.success) {
+        yield* Effect.fail(new ProvisionError({ operation: "write" }));
+      }
+    }),
+    { concurrency: 1 }
   );
-  process.exitCode = 1;
-}
+});
+
+await Effect.runPromise(
+  provision().pipe(
+    Effect.catch(() =>
+      Effect.sync(() => {
+        process.stderr.write("Provisioning failed.\n");
+        process.exitCode = 1;
+      })
+    )
+  )
+);
