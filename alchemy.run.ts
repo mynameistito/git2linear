@@ -48,6 +48,18 @@ export default Stack(
       },
       main: "./src/index.ts",
       name: workerIdentity.name,
+      observability: {
+        enabled: true,
+        headSamplingRate: 1,
+        logs: {
+          enabled: true,
+          headSamplingRate: 1,
+          invocationLogs: true,
+          persist: true,
+        },
+        redactQueryString: true,
+        traces: { enabled: true, headSamplingRate: 1, persist: true },
+      },
     }).pipe(AdoptPolicy.adopt(true));
 
     return { url: worker.url };

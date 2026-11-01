@@ -89,6 +89,8 @@ This command provisions the three core runtime secrets without resolving optiona
 
 ## Manual operations
 
+Both deployment configurations enable native Cloudflare invocation logs and traces at 100% sampling, persist them to Cloudflare, and redact URL query strings. Do not log credentials, request headers, payloads or native webhook URLs. The live Worker's observability settings were enabled and read back through the script-settings API on 2026-11-01 without replacing its code or bindings. The provisioning credential cannot query stored telemetry (HTTP 403); viewing emitted events requires an appropriate existing observability reader credential. Saved settings alone do not prove trace ingestion or successful reconciliation.
+
 Set `WORKER_ORIGIN` to the deployed HTTPS origin. The operator script injects the bearer credential through the environment, never an argument. Requests reject redirects and have a 30-second timeout.
 
 ```powershell

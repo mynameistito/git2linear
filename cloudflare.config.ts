@@ -39,6 +39,18 @@ export default defineConfig({
     },
     exports: { Reconciler: exports.durableObject({ storage: "sqlite" }) },
     name: workerIdentity.name,
+    observability: {
+      enabled: true,
+      headSamplingRate: 1,
+      logs: {
+        enabled: true,
+        headSamplingRate: 1,
+        invocationLogs: true,
+        persist: true,
+      },
+      redactQueryString: true,
+      traces: { enabled: true, headSamplingRate: 1, persist: true },
+    },
     triggers: [triggers.scheduled({ schedule: workerIdentity.cron })],
   },
 });
