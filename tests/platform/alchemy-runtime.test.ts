@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
+import path from "node:path";
 
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -8,7 +10,12 @@ describe("Alchemy runtime compatibility", () => {
     const output = await Effect.runPromise(
       Effect.try(() =>
         execFileSync(
-          "bun",
+          path.join(
+            homedir(),
+            ".bun",
+            "bin",
+            process.platform === "win32" ? "bun.exe" : "bun"
+          ),
           [
             "-e",
             'const runtime = await import("@effect/platform-bun/BunRuntime"); const auth = await import("alchemy/Auth/OAuthFlow"); console.log(typeof runtime.runMain + "," + typeof auth.makeOAuthClient);',
