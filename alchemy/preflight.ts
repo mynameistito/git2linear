@@ -47,17 +47,34 @@ const alchemyText = {
   ALCHEMY_WORKER_NAME: workerIdentity.name,
 };
 
+const webhookSecrets = ["LINEAR_WEBHOOK_URL", "LINEAR_WEBHOOK_SECRET"];
+
 const requiredSecrets = [
   "GITHUB_TOKEN",
   "LINEAR_API_KEY",
   "MANUAL_TRIGGER_TOKEN",
 ];
 
+type WebhookMode = "absent" | "transition" | "required";
+
+const validWebhookCount = (mode: WebhookMode, count: number) => {
+  if (mode === "absent") {
+    return count === 0;
+  }
+
+  if (mode === "required") {
+    return count === 2;
+  }
+
+  return count === 0 || count === 2;
+};
+
 /** Reject unaccounted bindings or changes to production identity and schedule. */
 export const validateInventory = Effect.fn("Preflight.validateInventory")(
   function* validateInventory(
     settings: typeof Settings.Type,
-    schedules: typeof Schedules.Type
+    schedules: typeof Schedules.Type,
+    webhookMode: WebhookMode = "absent"
   ) {
     const { bindings } = settings.result;
     const names = new Set(bindings.map((binding) => binding.name));
@@ -69,6 +86,7 @@ export const validateInventory = Effect.fn("Preflight.validateInventory")(
     const allowed = new Set([
       ...Object.keys(expectedText),
       ...requiredSecrets,
+      ...webhookSecrets,
       "RECONCILER",
       ...Object.keys(alchemyText),
     ]);
@@ -81,8 +99,18 @@ export const validateInventory = Effect.fn("Preflight.validateInventory")(
       return yield* Effect.fail(new PreflightFailure());
     }
 
+    const webhookCount = webhookSecrets.filter((name) =>
+      names.has(name)
+    ).length;
+
     if (
-      bindings.length !== 8 + alchemyCount ||
+      !validWebhookCount(webhookMode, webhookCount) ||
+      bindings.length !== 8 + alchemyCount + webhookCount
+    ) {
+      return yield* Effect.fail(new PreflightFailure());
+    }
+
+    if (
       schedules.result.schedules.length !== 1 ||
       schedules.result.schedules[0]?.cron !== workerIdentity.cron
     ) {
@@ -105,7 +133,10 @@ export const validateInventory = Effect.fn("Preflight.validateInventory")(
       }
     }
 
-    for (const name of requiredSecrets) {
+    for (const name of [
+      ...requiredSecrets,
+      ...webhookSecrets.filter((secretName) => names.has(secretName)),
+    ]) {
       if (
         !bindings.some(
           (binding) => binding.name === name && binding.type === "secret_text"
@@ -137,7 +168,8 @@ export const validateInventory = Effect.fn("Preflight.validateInventory")(
 
 /** Read only public binding metadata; errors never include provider responses. */
 export const preflight = Effect.fn("Preflight.run")(function* preflight(
-  options: HttpOptions = {}
+  options: HttpOptions = {},
+  final = false
 ) {
   const config = yield* deploymentConfig;
   const account = yield* Config.String("CLOUDFLARE_ACCOUNT_ID");
@@ -151,7 +183,7 @@ export const preflight = Effect.fn("Preflight.run")(function* preflight(
     return yield* Effect.fail(new PreflightFailure());
   }
 
-  if (config.webhook !== undefined || Redacted.value(token).trim() === "") {
+  if (Redacted.value(token).trim() === "") {
     return yield* Effect.fail(new PreflightFailure());
   }
 
@@ -175,5 +207,11 @@ export const preflight = Effect.fn("Preflight.run")(function* preflight(
   const schedulesObject =
     yield* Schema.decodeUnknownEffect(Schedules)(schedules);
 
-  return yield* validateInventory(settingsObject, schedulesObject);
+  let mode: WebhookMode = "absent";
+
+  if (config.webhook !== undefined) {
+    mode = final === true ? "required" : "transition";
+  }
+
+  return yield* validateInventory(settingsObject, schedulesObject, mode);
 });
