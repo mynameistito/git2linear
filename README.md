@@ -1,7 +1,7 @@
 <h1>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/gitline-logo-white.png">
-    <img src="docs/assets/gitline-logo-dark.png" alt="" width="64" height="64" align="absmiddle">
+    <img src="docs/assets/gitline-logo-dark.png" alt="" width="64" height="64" align="middle">
   </picture>
   Gitline
 </h1>
@@ -60,9 +60,9 @@ Gitline was previously named `git2linear`. Existing deployment and state identif
 The setup flow is:
 
 1. Configure your deployment identity and provide GitHub, Linear, and manual-trigger credentials. Native push hooks also need the webhook URL and signing secret from Linear.
-2. Deploy with mutations disabled (`APPLY_ENABLED=false`).
+2. Review the deployment plan and provision using the production preflight's required settings, including `APPLY_ENABLED=true`.
 3. Run a remote dry run and inspect its completed results.
-4. Enable mutations and apply the reviewed changes.
+4. Apply the reviewed changes after the dry run succeeds.
 
 Once the deployment and operator environment are configured, use:
 
@@ -72,7 +72,7 @@ bun scripts/operate.ts status
 bun scripts/operate.ts apply
 ```
 
-Apply requires a successful persisted dry run and enabled mutations. A trigger being accepted does not mean the run has finished; check its status and repository outcomes.
+Apply requires a successful persisted dry run and enabled mutations. A trigger being accepted does not mean the run has finished; check its status until complete. Inspect repository outcomes through authenticated GET `/status?details=true`, following `nextCursor` with the `cursor` query parameter until no next page remains.
 
 ## Explore the project
 
