@@ -48,9 +48,19 @@ describe("Varlock deployment schema", () => {
     { MANUAL_TRIGGER_TOKEN: "too-short" },
     { LINEAR_TEAM_ID: "invalid" },
   ])("fails closed without exposing credentials %#", (overrides) => {
-    const result = run({ ...base, ...overrides });
+    const values = { ...base, ...overrides };
+    const result = run(values);
+
     expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).not.toContain(manual);
-    expect(result.stdout + result.stderr).not.toContain(base.GITHUB_TOKEN);
+
+    const output = result.stdout + result.stderr;
+    const leakedCredentials = [
+      values.GITHUB_TOKEN,
+      values.LINEAR_API_KEY,
+      values.MANUAL_TRIGGER_TOKEN,
+      values.CLOUDFLARE_API_TOKEN,
+    ].filter((credential) => credential.length > 0 && output.includes(credential));
+
+    expect(leakedCredentials).toStrictEqual([]);
   });
 });
