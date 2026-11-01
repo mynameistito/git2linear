@@ -23,6 +23,7 @@ bun install
 bun run test
 bunx tsrs --noEmit
 bun run check
+$env:LINEAR_TEAM_ID = '<discovered team UUID>'
 bun run build
 bun run deploy:check
 ```
@@ -36,6 +37,8 @@ The Effect migration is reviewed in the PR and has not replaced the deployed rel
 ## Configuration and deployment
 
 The `cloudflare.config.ts` deployment is named `git2linear`, in the Personal Cloudflare account. Confirm the account before reusing this project elsewhere. Set the discovered `LINEAR_TEAM_ID` in the build environment; the team key is MY. The hourly schedule is `0 * * * *` (UTC). A singleton Durable Object per owner/team stores identities, operation intents, checkpoints, repository outcomes and failures. Each alarm advances bounded work, arms a recovery alarm before external effects, and persists continuation. Running requests return the existing run rather than starting another.
+
+Configuration loading rejects missing, empty, whitespace-only and malformed team UUIDs, including bootstrap builds. Supply the discovered UUID before build or deployment commands.
 
 `APPLY_ENABLED` defaults to `false`. Deploy first in this mode, provision secrets, run a dry run, inspect its complete report, then deploy with `APPLY_ENABLED=true`. A successful persisted dry run is also required before an apply run. Keep the same owner/team configuration to retain durable identity state.
 

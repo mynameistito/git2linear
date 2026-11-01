@@ -1,13 +1,15 @@
 import { bindings, defineConfig, exports, triggers } from "cf/config";
 import { Config, Effect } from "effect";
 
+import { teamIdConfig } from "./src/platform/deployment";
+
 const deployment = Effect.runSync(
   Config.all({
     applyEnabled: Config.Boolean("APPLY_ENABLED").pipe(
       Config.withDefault(false)
     ),
     bootstrap: Config.Boolean("BOOTSTRAP_MODE").pipe(Config.withDefault(false)),
-    teamId: Config.String("LINEAR_TEAM_ID").pipe(Config.withDefault("")),
+    teamId: teamIdConfig,
   })
 );
 
