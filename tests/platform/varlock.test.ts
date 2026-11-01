@@ -59,7 +59,9 @@ describe("Varlock deployment schema", () => {
       values.LINEAR_API_KEY,
       values.MANUAL_TRIGGER_TOKEN,
       values.CLOUDFLARE_API_TOKEN,
-    ].filter((credential) => credential.length > 0 && output.includes(credential));
+    ].filter(
+      (credential) => credential.length > 0 && output.includes(credential)
+    );
 
     expect(leakedCredentials).toStrictEqual([]);
   });
