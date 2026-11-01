@@ -1,9 +1,10 @@
-# Gitline
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/gitline-logo-dark.svg">
-  <img src="docs/assets/gitline-logo.svg" alt="Gitline" width="240">
-</picture>
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/gitline-logo-dark.svg">
+    <img src="docs/assets/gitline-logo.svg" alt="" width="32" height="32" align="absmiddle">
+  </picture>
+  Gitline
+</h1>
 
 **Your repos. In line.**
 
