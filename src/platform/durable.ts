@@ -1,196 +1,364 @@
-/* oxlint-disable sonarjs/no-duplicate-string -- Fixed internal metadata keys identify the same durable records across lifecycle operations. */
-/* oxlint-disable anti-slop/no-runtime-typeof -- Private persisted checkpoint safe diagnostic projection. */
 import { DurableObject } from "cloudflare:workers";
+import { Effect, Option, Schema } from "effect";
 
-import type { RepositoryStatus } from "../application/runner";
+import { PersistenceError } from "../application/persistence-error";
 import { createRunner } from "../application/runner";
 import type { Env } from "./env";
-import { pruneReportBatch } from "./retention";
+import { pruneEffect } from "./retention";
 import {
   RunCoordinator,
   checkpointDiagnostics,
+  decodeRunRecord,
   repositoryIdFromRecordKey,
 } from "./run";
-import type { RunRecord, RunStore } from "./run";
+import type { RunRecord, RunPersistence } from "./run";
 
-/** One coordinator per configured owner/workspace, never per repository. */
-export class Reconciler extends DurableObject<Env> {
-  readonly #coordinator: RunCoordinator;
+const PublicRepositoryStatus = Schema.Struct({
+  dryRun: Schema.optionalKey(Schema.Boolean),
+  hookId: Schema.optionalKey(Schema.Number),
+  manualActionRequired: Schema.Literal(true),
+  outcome: Schema.Literals([
+    "already-configured",
+    "created",
+    "repaired",
+    "skipped",
+    "failed",
+  ]),
+  ping: Schema.Literals(["not-requested", "accepted", "failed"]),
+  pingDelivery: Schema.optionalKey(
+    Schema.Literals(["verified", "failed", "pending"])
+  ),
+  plannedActions: Schema.optionalKey(
+    Schema.Array(
+      Schema.Literals([
+        "project:create",
+        "project:reuse",
+        "project:rename",
+        "project:attach-repository-url",
+        "hook:create",
+        "hook:reuse",
+        "hook:repair",
+        "hook:manual",
+        "native-sync:manual",
+      ])
+    )
+  ),
+  pushProcessing: Schema.Literal("unverified"),
+  reason: Schema.Literals([
+    "foreign-owner",
+    "archived",
+    "disabled",
+    "identity-conflict",
+    "missing-mapped-project",
+    "ambiguous-project",
+    "archived-project",
+    "duplicate-endpoint-hooks",
+    "commit-webhook-credentials-unavailable",
+    "provider-failure-or-retry-exhausted",
+    "verification-or-retry-exhausted",
+    "dry-run-plan",
+    "native-sync-configuration-and-project-routing-require-supported-api",
+  ]),
+  supportedStateVerified: Schema.optionalKey(Schema.Boolean),
+});
 
-  /** Platform lifecycle contract. */
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+const RUN = "run";
+const PREVIOUS = "previous-run-id";
+const CURSOR = "report-retention-cursor";
+const DRY_RUN = "dry-run-complete";
+const REPOSITORY = "repository:";
+const PAGE_SIZE = 100;
 
-    const store: RunStore = {
-      get: async () => await ctx.storage.get<RunRecord>("run"),
-      getAlarm: async () => await ctx.storage.getAlarm(),
-      put: async (record) => {
-        await ctx.storage.put("run", record);
-      },
-      schedule: async (at) => {
-        await ctx.storage.setAlarm(at);
-      },
-      start: async (record) =>
-        await ctx.storage.transaction(async (transaction) => {
-          const current = await transaction.get<RunRecord>("run");
+const storageEffect = <T>(operation: string, run: () => Promise<T>) =>
+  Effect.tryPromise({
+    catch: () => new PersistenceError({ operation }),
+    try: run,
+  });
 
-          if (current?.status === "running") {
-            return current;
-          }
+const optionalRun = Schema.decodeUnknownEffect(
+  Schema.UndefinedOr(Schema.Unknown)
+);
 
-          if (current !== undefined) {
-            await transaction.put("previous-run-id", current.runId);
-          }
+const optionalString = Schema.decodeUnknownEffect(
+  Schema.UndefinedOr(Schema.String)
+);
 
-          await transaction.delete("report-retention-cursor");
-          await transaction.put("run", record);
+const readRun = (read: Effect.Effect<unknown, PersistenceError>) =>
+  read.pipe(
+    Effect.flatMap(optionalRun),
+    Effect.flatMap((value) =>
+      value === undefined ? Effect.succeed(undefined) : decodeRunRecord(value)
+    ),
+    Effect.mapError(() => new PersistenceError({ operation: "decode-run" }))
+  );
 
-          return record;
-        }),
-    };
-
-    this.#coordinator = new RunCoordinator(
-      store,
-      createRunner(env, ctx.storage)
+const startTransaction = (tx: DurableObjectTransaction, record: RunRecord) =>
+  Effect.gen(function* runStartTransaction() {
+    const current = yield* readRun(
+      storageEffect("get-run", async () => await tx.get(RUN))
     );
+
+    if (current?.status === "running") {
+      return current;
+    }
+
+    if (current !== undefined) {
+      yield* storageEffect("previous-run", async () => {
+        await tx.put(PREVIOUS, current.runId);
+      });
+    }
+
+    yield* storageEffect("clear-cursor", async () => await tx.delete(CURSOR));
+    yield* storageEffect("put-run", async () => {
+      await tx.put(RUN, record);
+    });
+
+    return record;
+  });
+
+const retentionStore = (tx: DurableObjectTransaction) => ({
+  cursor: async () =>
+    Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.String))(
+      await tx.get(CURSOR)
+    ),
+  keys: async (after: string | undefined, limit: number) => {
+    const options: DurableObjectListOptions = { limit, prefix: REPOSITORY };
+
+    if (after !== undefined) {
+      options.startAfter = after;
+    }
+
+    const entries = await tx.list(options);
+
+    return [...entries.keys()];
+  },
+  remove: async (keys: string[]) => {
+    await tx.delete(keys);
+  },
+  saveCursor: async (cursor: string | null) => {
+    await (cursor === null ? tx.delete(CURSOR) : tx.put(CURSOR, cursor));
+  },
+});
+
+const maintenanceTransaction = (tx: DurableObjectTransaction) =>
+  Effect.gen(function* runMaintenanceTransaction() {
+    const current = yield* readRun(
+      storageEffect("get-run", async () => await tx.get(RUN))
+    );
+
+    if (current === undefined) {
+      return false;
+    }
+
+    const previous = yield* storageEffect(
+      "get-previous",
+      async () => await tx.get(PREVIOUS)
+    ).pipe(
+      Effect.flatMap(optionalString),
+      Effect.mapError(
+        () => new PersistenceError({ operation: "decode-previous" })
+      )
+    );
+
+    return yield* pruneEffect(retentionStore(tx), current.runId, previous);
+  });
+
+const makeStorage = (storage: DurableObjectStorage) => {
+  const get = (key: string) =>
+    storageEffect("get-storage", async () => await storage.get(key));
+
+  const getRun = () => readRun(get(RUN));
+
+  const getAlarm = () =>
+    storageEffect("get-alarm", async () => await storage.getAlarm());
+
+  const schedule = (at: number) =>
+    storageEffect("set-alarm", async () => {
+      await storage.setAlarm(at);
+    });
+
+  const start = (record: RunRecord) =>
+    storageEffect(
+      "start-run",
+      async () =>
+        await storage.transaction(
+          async (tx) => await Effect.runPromise(startTransaction(tx, record))
+        )
+    );
+
+  const persistence: RunPersistence = {
+    get: getRun,
+    getAlarm,
+    put: (record) =>
+      storageEffect("put-run", async () => {
+        await storage.put(RUN, record);
+      }),
+    schedule,
+    start,
+  };
+
+  const list = (options: DurableObjectListOptions) =>
+    storageEffect("list-repositories", async () => await storage.list(options));
+
+  const markDryRun = () =>
+    storageEffect("mark-dry-run", async () => {
+      await storage.put(DRY_RUN, true);
+    });
+
+  const maintenance = () =>
+    storageEffect(
+      "maintenance",
+      async () =>
+        await storage.transaction(
+          async (tx) => await Effect.runPromise(maintenanceTransaction(tx))
+        )
+    );
+
+  return {
+    get,
+    getAlarm,
+    list,
+    maintenance,
+    markDryRun,
+    persistence,
+    readRun: getRun,
+    schedule,
+  };
+};
+
+type Storage = ReturnType<typeof makeStorage>;
+
+const summaryEffect = Effect.fn("Reconciler.summary")(function* summaryEffect(
+  storage: Storage,
+  record: RunRecord | undefined
+) {
+  const nextAlarm = yield* storage.getAlarm();
+
+  return Response.json(
+    record
+      ? {
+          continuation: {
+            ...checkpointDiagnostics(record.checkpoint),
+            failures: record.failures,
+            nextAlarm,
+          },
+          dryRun: record.dryRun,
+          runId: record.runId,
+          startedAt: record.startedAt,
+          status: record.status,
+          summary: record.summary,
+          updatedAt: record.updatedAt,
+        }
+      : { status: "idle" }
+  );
+});
+
+const detailsEffect = Effect.fn("Reconciler.details")(function* detailsEffect(
+  storage: Storage,
+  record: RunRecord,
+  url: URL
+) {
+  const prefix = `${REPOSITORY + record.runId}:`;
+  const after = url.searchParams.get("after");
+
+  if (after !== null && !after.startsWith(prefix)) {
+    return Response.json({ error: "invalid-cursor" }, { status: 400 });
   }
 
-  /** Handle coordinator requests.
-   * @param request - Internal request.
-   * @returns Safe status.
-   */
-  // oxlint-disable-next-line sonarjs/cognitive-complexity -- Authenticated operational projection and bounded pagination remain together.
-  override async fetch(request: Request): Promise<Response> {
-    if (request.method === "GET") {
-      const record = await this.ctx.storage.get<RunRecord>("run");
-      const nextAlarm = await this.ctx.storage.getAlarm();
-      const diagnostics = checkpointDiagnostics(record?.checkpoint);
+  const options: DurableObjectListOptions = { limit: PAGE_SIZE, prefix };
 
-      const url = new URL(request.url);
+  if (after !== null) {
+    options.startAfter = after;
+  }
 
-      if (record && url.searchParams.get("details") === "true") {
-        const prefix = `repository:${record.runId}:`;
-        const after = url.searchParams.get("after");
+  const entries = yield* storage.list(options);
+  const keys = [...entries.keys()];
 
-        if (after !== null && !after.startsWith(prefix)) {
-          return Response.json({ error: "invalid-cursor" }, { status: 400 });
-        }
+  return Response.json({
+    nextCursor: entries.size === PAGE_SIZE ? (keys.at(-1) ?? null) : null,
+    repositories: [...entries].flatMap(([key, status]) => {
+      const repositoryId = repositoryIdFromRecordKey(key, prefix);
 
-        const options: DurableObjectListOptions = {
-          limit: 100,
-          prefix,
-        };
+      const safe = Option.getOrUndefined(
+        Schema.decodeUnknownOption(PublicRepositoryStatus)(status)
+      );
 
-        if (after !== null) {
-          options.startAfter = after;
-        }
+      return repositoryId === null || safe === undefined
+        ? []
+        : [{ ...safe, repositoryId, runId: record.runId }];
+    }),
+    runId: record.runId,
+  });
+});
 
-        const entries = await this.ctx.storage.list<RepositoryStatus>(options);
+const startEffect = Effect.fn("Reconciler.start")(function* startEffect(
+  storage: Storage,
+  coordinator: RunCoordinator,
+  env: Env,
+  url: URL
+) {
+  const dryRun = url.searchParams.get("dryRun") !== "false";
 
-        const keys = [...entries.keys()];
+  if (!dryRun && env.APPLY_ENABLED !== "true") {
+    return Response.json({ error: "apply-disabled" }, { status: 409 });
+  }
 
-        return Response.json({
-          nextCursor: entries.size === 100 ? (keys.at(-1) ?? null) : null,
-          repositories: [...entries].flatMap(([key, status]) => {
-            const repositoryId = repositoryIdFromRecordKey(key, prefix);
+  if (!dryRun) {
+    const stored = yield* storage.get(DRY_RUN);
 
-            return repositoryId === null ? [] : [{ ...status, repositoryId }];
-          }),
-          runId: record.runId,
-        });
-      }
-
-      return Response.json(
-        record
-          ? {
-              continuation: {
-                ...diagnostics,
-                failures: record.failures,
-                nextAlarm,
-              },
-              dryRun: record.dryRun,
-              runId: record.runId,
-              startedAt: record.startedAt,
-              status: record.status,
-              summary: record.summary,
-              updatedAt: record.updatedAt,
-            }
-          : { status: "idle" }
+    if (stored !== undefined) {
+      yield* Schema.decodeUnknownEffect(Schema.Boolean)(stored).pipe(
+        Effect.mapError(
+          () => new PersistenceError({ operation: "decode-dry-run" })
+        )
       );
     }
 
-    const dryRun = new URL(request.url).searchParams.get("dryRun") !== "false";
-
-    if (!dryRun && this.env.APPLY_ENABLED !== "true") {
-      return Response.json({ error: "apply-disabled" }, { status: 409 });
-    }
-
-    if (
-      !dryRun &&
-      (await this.ctx.storage.get<boolean>("dry-run-complete")) !== true
-    ) {
+    if (stored !== true) {
       return Response.json({ error: "dry-run-required" }, { status: 409 });
     }
-
-    const record = await this.#coordinator.start(dryRun);
-
-    return Response.json(
-      { dryRun: record.dryRun, runId: record.runId, status: record.status },
-      { status: 202 }
-    );
   }
 
-  /** Platform lifecycle contract. */
-  override async alarm(): Promise<void> {
-    await this.#coordinator.advance();
+  const record = yield* coordinator.startEffect(dryRun);
 
-    const moreReports = await this.ctx.storage.transaction(
-      async (transaction) => {
-        const current = await transaction.get<RunRecord>("run");
+  return Response.json(
+    { dryRun: record.dryRun, runId: record.runId, status: record.status },
+    { status: 202 }
+  );
+});
 
-        if (current === undefined) {
-          return false;
-        }
+const fetchEffect = Effect.fn("Reconciler.fetch")(function* fetchEffect(
+  storage: Storage,
+  coordinator: RunCoordinator,
+  env: Env,
+  request: Request
+) {
+  const url = new URL(request.url);
 
-        const previous = await transaction.get<string>("previous-run-id");
+  if (request.method !== "GET") {
+    return yield* startEffect(storage, coordinator, env, url);
+  }
 
-        return await pruneReportBatch(
-          {
-            cursor: async () =>
-              await transaction.get<string>("report-retention-cursor"),
-            keys: async (after, limit) => {
-              const options: DurableObjectListOptions = {
-                limit,
-                prefix: "repository:",
-              };
+  const record = yield* storage.readRun();
 
-              if (after !== undefined) {
-                options.startAfter = after;
-              }
+  if (record && url.searchParams.get("details") === "true") {
+    return yield* detailsEffect(storage, record, url);
+  }
 
-              const entries = await transaction.list(options);
+  return yield* summaryEffect(storage, record);
+});
 
-              return [...entries.keys()];
-            },
-            remove: async (keys) => {
-              await transaction.delete(keys);
-            },
-            saveCursor: async (cursor) => {
-              await (cursor === null
-                ? transaction.delete("report-retention-cursor")
-                : transaction.put("report-retention-cursor", cursor));
-            },
-          },
-          current.runId,
-          previous
-        );
-      }
-    );
+const maintenanceEffect = Effect.fn("Reconciler.maintenance")(
+  function* maintenanceEffect(storage: Storage) {
+    const more = yield* storage.maintenance();
+    const record = yield* storage.readRun();
 
-    const record = await this.ctx.storage.get<RunRecord>("run");
-
-    if (moreReports && record?.status !== "running") {
-      await this.ctx.storage.setAlarm(Date.now() + 1000);
+    if (
+      more &&
+      record?.status !== "running" &&
+      (yield* storage.getAlarm()) === null
+    ) {
+      yield* storage.schedule(Date.now() + 1000);
     }
 
     if (
@@ -198,7 +366,61 @@ export class Reconciler extends DurableObject<Env> {
       record.status === "complete" &&
       record.summary.failed === 0
     ) {
-      await this.ctx.storage.put("dry-run-complete", true);
+      yield* storage.markDryRun();
     }
+  }
+);
+
+const alarmEffect = Effect.fn("Reconciler.alarm")(function* alarmEffect(
+  storage: Storage,
+  coordinator: RunCoordinator
+) {
+  const record = yield* storage.readRun();
+  const alarm = yield* storage.getAlarm();
+  const now = Date.now();
+
+  if (alarm !== null && alarm > now) {
+    return;
+  }
+
+  if (
+    record?.status === "running" &&
+    record.retryAt !== undefined &&
+    record.retryAt > now
+  ) {
+    yield* storage.schedule(record.retryAt);
+
+    return;
+  }
+
+  yield* coordinator.advanceEffect();
+  yield* maintenanceEffect(storage);
+});
+
+/** One coordinator per configured owner/workspace, never per repository. */
+export class Reconciler extends DurableObject<Env> {
+  readonly #coordinator: RunCoordinator;
+  readonly #storage: Storage;
+  /** Platform lifecycle contract. */
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.#storage = makeStorage(ctx.storage);
+    this.#coordinator = new RunCoordinator({
+      runner: createRunner(env, ctx.storage),
+      store: this.#storage.persistence,
+    });
+  }
+  /** Handle coordinator requests.
+   * @param request - Internal request.
+   * @returns Safe status.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    return await Effect.runPromise(
+      fetchEffect(this.#storage, this.#coordinator, this.env, request)
+    );
+  }
+  /** Platform lifecycle contract. */
+  override async alarm(): Promise<void> {
+    await Effect.runPromise(alarmEffect(this.#storage, this.#coordinator));
   }
 }
