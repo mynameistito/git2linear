@@ -8,7 +8,8 @@ const base = {
   GITHUB_TOKEN: "synthetic-github",
   LINEAR_API_KEY: "synthetic-linear",
   LINEAR_TEAM_ID: "00000000-0000-4000-8000-000000000001",
-  MANUAL_TRIGGER_TOKEN: "synthetic-manual",
+  MANUAL_TRIGGER_TOKEN:
+    "synthetic-manual-test-value-with-at-least-43-characters",
 };
 
 const load = async (values: Record<string, string | null | undefined>) =>
@@ -49,6 +50,7 @@ describe("Alchemy deployment configuration", () => {
     { GITHUB_TOKEN: null },
     { LINEAR_API_KEY: " " },
     { MANUAL_TRIGGER_TOKEN: "" },
+    { MANUAL_TRIGGER_TOKEN: "too-short" },
     { LINEAR_WEBHOOK_URL: "synthetic-url" },
     { ALCHEMY_CONFIRMED_BINDINGS: "core+webhook" },
     {

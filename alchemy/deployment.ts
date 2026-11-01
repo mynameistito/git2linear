@@ -31,6 +31,10 @@ export const deploymentConfig = Effect.gen(function* readDeploymentConfig() {
   const linearApiKey = yield* nonBlankSecret("LINEAR_API_KEY");
   const manualTriggerToken = yield* nonBlankSecret("MANUAL_TRIGGER_TOKEN");
 
+  yield* Schema.decodeUnknownEffect(Schema.Literal(true))(
+    Redacted.value(manualTriggerToken).length >= 43
+  ).pipe(Effect.mapError((error) => new Config.ConfigError(error)));
+
   const webhookUrl = yield* Config.option(nonBlankSecret("LINEAR_WEBHOOK_URL"));
 
   const webhookSecret = yield* Config.option(
