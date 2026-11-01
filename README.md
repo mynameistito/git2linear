@@ -72,7 +72,7 @@ bun scripts/operate.ts status
 bun scripts/operate.ts apply
 ```
 
-Apply requires a successful persisted dry run and enabled mutations. A trigger being accepted does not mean the run has finished; check its status until complete. Inspect repository outcomes through authenticated GET `/status?details=true`, following `nextCursor` with the `cursor` query parameter until no next page remains.
+Apply requires a successful persisted dry run and enabled mutations. A trigger being accepted does not mean the run has finished; check its status until complete. Inspect repository outcomes through authenticated GET `/status?details=true`, following `nextCursor` with the `after` query parameter until no next page remains.
 
 ## Explore the project
 
