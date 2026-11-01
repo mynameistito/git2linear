@@ -31,5 +31,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Cloudflare generated artifacts and local credentials
 .cloudflare/
+.alchemy/
 .wrangler/
 .dev.vars*

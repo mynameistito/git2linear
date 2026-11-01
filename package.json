@@ -4,6 +4,8 @@
   "type": "module",
   "module": "index.ts",
   "scripts": {
+    "alchemy:plan": "node node_modules/alchemy/bin/cli.js plan --stage production",
+    "alchemy:deploy": "node node_modules/alchemy/bin/cli.js deploy --stage production",
     "typecheck": "tsrs --noEmit",
     "check": "ultracite check",
     "fix": "ultracite fix",
@@ -19,10 +21,13 @@
     "tsrs": "^0.20.1-ts7.1.0-beta"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.84",
     "@cloudflare/vite-plugin": "^2.0.0-beta.v.8",
     "@cloudflare/workers-types": "^5.20261031.1",
+    "@effect/platform-node": "4.1.1",
     "@effect/vitest": "4.1.1",
     "@types/bun": "latest",
+    "alchemy": "2.0.0-beta.84",
     "cf": "^1.0.0-beta.26",
     "eslint-plugin-github": "6.1.2",
     "eslint-plugin-jsdoc": "^65.4.2",
