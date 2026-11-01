@@ -64,17 +64,19 @@ const retryDeadline = (headers: Headers, now: number): number => {
   const retry = headers.get("retry-after");
   const seconds = retry === null ? Number.NaN : Number(retry);
   const date = retry === null ? Number.NaN : Date.parse(retry);
-  const reset = Number(headers.get("x-ratelimit-reset")) * 1000;
+  const resetSeconds = Number(headers.get("x-ratelimit-reset"));
+  const reset = Number.isFinite(resetSeconds) ? resetSeconds * 1000 : 0;
+  const bounded = (deadline: number) => Math.min(deadline, now + 3_600_000);
 
   if (Number.isFinite(seconds)) {
-    return Math.max(now + 1000, now + seconds * 1000);
+    return bounded(Math.max(now + 1000, now + seconds * 1000));
   }
 
   if (Number.isFinite(date)) {
-    return Math.max(now + 1000, date);
+    return bounded(Math.max(now + 1000, date));
   }
 
-  return Math.max(now + 60_000, reset);
+  return bounded(Math.max(now + 60_000, reset));
 };
 
 const responseFailure = (response: Response, now: number): ProviderError => {
@@ -149,16 +151,65 @@ export const requestEffect = Effect.fn("ProviderHttp.request")(
   }
 );
 
-/** Parse JSON without retaining untrusted failure contents.
+const invalidBody = () => new ProviderError({ kind: "invalid-response" });
+
+const cancelReader = (reader: { readonly cancel: () => Promise<void> }) =>
+  Effect.sync(() => {
+    void reader.cancel().catch(() => null);
+  });
+
+/** Parse bounded JSON and cancel the reader when interrupted.
  * @param response - Provider response.
  * @returns Unknown JSON for the provider schema decoder.
  */
 export const readJsonEffect = Effect.fn("ProviderHttp.readJson")(
-  (response: Response) =>
-    Effect.tryPromise({
-      catch: () => new ProviderError({ kind: "invalid-response" }),
-      try: async () => await response.json(),
-    })
+  function* readJson(response: Response) {
+    const { body } = response;
+
+    if (body === null) {
+      return yield* Effect.fail(invalidBody());
+    }
+
+    return yield* Effect.acquireUseRelease(
+      Effect.try({ catch: invalidBody, try: () => body.getReader() }),
+      (reader) =>
+        Effect.gen(function* readBody() {
+          const decoder = new TextDecoder();
+          let text = "";
+
+          while (true) {
+            const chunk = yield* Effect.tryPromise({
+              catch: invalidBody,
+              try: async () => await reader.read(),
+            });
+
+            if (chunk.done) {
+              break;
+            }
+
+            const bytes = yield* Schema.decodeUnknownEffect(Schema.Uint8Array)(
+              chunk.value
+            ).pipe(Effect.mapError(invalidBody));
+
+            text += decoder.decode(bytes, { stream: true });
+          }
+
+          return yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(Schema.Unknown)
+          )(text + decoder.decode()).pipe(Effect.mapError(invalidBody));
+        }).pipe(
+          Effect.onInterrupt(() => cancelReader(reader)),
+          Effect.timeoutOrElse({
+            duration: "15 seconds",
+            orElse: () => Effect.fail(invalidBody()),
+          })
+        ),
+      (reader) =>
+        Effect.sync(() => {
+          reader.releaseLock();
+        })
+    );
+  }
 );
 
 const decodeFailure = Schema.decodeUnknownSync(ProviderFailureSchema);

@@ -2,9 +2,67 @@ import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 
-import { requestEffect } from "../../src/providers/http";
+import { readJsonEffect, requestEffect } from "../../src/providers/http";
 
 describe("HTTP requests", () => {
+  it("cancels a stalled response body at its virtual deadline", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* stalledBody() {
+          const ready = yield* Deferred.make<boolean>();
+          let cancelled = false;
+
+          const stream = new ReadableStream<Uint8Array>({
+            cancel() {
+              cancelled = true;
+            },
+            pull() {
+              Effect.runSync(Deferred.succeed(ready, true));
+            },
+          });
+
+          const fiber = yield* readJsonEffect(new Response(stream)).pipe(
+            Effect.flip,
+            Effect.forkScoped
+          );
+
+          yield* Deferred.await(ready);
+          yield* TestClock.adjust("15 seconds");
+          const failure = yield* Fiber.join(fiber);
+          expect(failure.kind).toBe("invalid-response");
+          expect(cancelled).toBeTruthy();
+          expect(stream.locked).toBeFalsy();
+        })
+      ).pipe(Effect.provide(TestClock.layer()))
+    );
+  });
+
+  it.each([
+    [{ "x-ratelimit-reset": "invalid" }, 70_000],
+    [{ "x-ratelimit-reset": "99999999999999999" }, 3_610_000],
+    [{ "retry-after": "999999999999999999" }, 3_610_000],
+  ])(
+    "bounds malformed and oversized retry headers %j",
+    async (headers, expected) => {
+      const failure = await Effect.runPromise(
+        requestEffect(
+          "https://example.com",
+          {},
+          {
+            fetch: async () =>
+              await Promise.resolve(
+                new Response(null, { headers, status: 429 })
+              ),
+            now: () => 10_000,
+          }
+        ).pipe(Effect.flip)
+      );
+
+      expect(failure.retryAt).toBe(expected);
+      expect(Number.isFinite(failure.retryAt)).toBeTruthy();
+    }
+  );
+
   it("rejects redirects without exposing response data", async () => {
     await Effect.runPromise(
       Effect.scoped(
