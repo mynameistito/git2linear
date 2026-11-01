@@ -20,7 +20,7 @@ Investigation on 2026-11-01 observed 207 saved GitHub integration mappings, incl
 
 ```powershell
 bun install
-bun test
+bun run test
 bunx tsrs --noEmit
 bun run check
 bun run build
@@ -28,6 +28,10 @@ bun run deploy:check
 ```
 
 `src/domain` contains pure identity and hook planning, `src/providers` implements paginated API adapters, `src/application` coordinates per-repository effects, and `src/platform` owns authentication, durable continuation, and Worker entrypoints. Existing tsrs and Ultracite tools remain in use. `bun run typecheck` invokes tsrs for TypeScript checking.
+
+Effect 4.1.1 owns provider operations, reconciliation, durable orchestration, configuration and operator scripts. Services expose native effects and layers; Promise facades remain at SDK lifecycle and compatibility boundaries. Effect Schema validates remote responses and persisted records, typed failures omit credentials, and redacted configuration protects secret values. Pure reconciliation decisions remain pure. Vitest runs the regression suite, including deterministic Effect clock and cancellation tests. Lint suppressions and rule overrides are not required.
+
+The Effect migration is reviewed in the PR and has not replaced the deployed release recorded above.
 
 ## Configuration and deployment
 
