@@ -1,7 +1,7 @@
 import { bindings, defineConfig, exports, triggers } from "cf/config";
 import { Config, Effect } from "effect";
 
-import { teamIdConfig } from "./src/platform/deployment";
+import { teamIdConfig } from "./src/platform/deployment.ts";
 
 const deployment = Effect.runSync(
   Config.all({
