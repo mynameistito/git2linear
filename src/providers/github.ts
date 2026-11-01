@@ -1,8 +1,18 @@
-/* oxlint-disable sonarjs/no-duplicate-string -- Repeated protocol failure tags remain local to their parsing branches. */
-/* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- Protocol parsers accept untrusted JSON and produce fully checked domain records. */
-/* oxlint-disable sonarjs/expression-complexity -- Fail-closed boundary parsers require complete field conjunctions. */
+import { Context, Effect, Layer, Schema } from "effect";
+
 import type { Repository, RepositoryHook } from "../domain/reconciliation";
-import { readJson, request } from "./http";
+import {
+  DeliveryPage,
+  HookPage,
+  HookResponse,
+  RepositoryPage,
+} from "./github-schema";
+import {
+  ProviderError,
+  ProviderFailureSchema,
+  readJsonEffect,
+  requestEffect,
+} from "./http";
 import type { HttpOptions, ProviderResult } from "./http";
 
 /** Credentials stay inside this adapter and must never enter status output. */
@@ -13,370 +23,390 @@ export interface GitHubOptions extends HttpOptions {
   readonly webhookSecret?: string;
 }
 
-const record = (input: unknown): input is Record<string, unknown> =>
-  typeof input === "object" && input !== null;
+interface Delivery {
+  id: number;
+  event: string;
+  statusCode: number | null;
+}
 
-const positiveId = (input: unknown): input is number =>
-  typeof input === "number" && Number.isSafeInteger(input) && input > 0;
+interface Page {
+  repositories: Repository[];
+  hasNextPage: boolean;
+}
 
-const parseRepository = (input: unknown): Repository | null => {
-  if (
-    !record(input) ||
-    !positiveId(input.id) ||
-    !record(input.owner) ||
-    typeof input.owner.login !== "string" ||
-    typeof input.name !== "string" ||
-    typeof input.html_url !== "string" ||
-    typeof input.archived !== "boolean" ||
-    typeof input.disabled !== "boolean"
-  ) {
-    return null;
-  }
-
-  return {
-    archived: input.archived,
-    disabled: input.disabled,
-    id: input.id,
-    name: input.name,
-    owner: input.owner.login,
-    url: input.html_url,
-  };
-};
-
-const parseHook = (input: unknown): RepositoryHook | null => {
-  if (
-    !record(input) ||
-    !positiveId(input.id) ||
-    typeof input.active !== "boolean" ||
-    !Array.isArray(input.events) ||
-    !input.events.every(
-      (event): event is string => typeof event === "string"
-    ) ||
-    !record(input.config) ||
-    typeof input.config.url !== "string" ||
-    typeof input.config.content_type !== "string" ||
-    typeof input.config.insecure_ssl !== "string"
-  ) {
-    return null;
-  }
-
-  return {
-    active: input.active,
-    contentType: input.config.content_type,
-    endpoint: input.config.url,
-    events: input.events,
-    id: input.id,
-    insecureSsl: input.config.insecure_ssl,
-  };
-};
-
-/** GitHub REST adapter with complete pagination and no credential-bearing diagnostics. */
-export class GitHubClient {
-  readonly #options: GitHubOptions;
-  /** Construct the authenticated GitHub boundary.
-   * @param options - Credentials and transport kept inside the adapter.
-   */
-  constructor(options: GitHubOptions) {
-    this.#options = options;
-  }
-
-  /** Read one bounded inventory page for durable continuation.
-   * @param page - One-based page number.
-   * @returns Parsed owned repositories and whether discovery should continue.
-   */
-  async listRepositoryPage(
+interface Port {
+  readonly listRepositoryPage: (
     page: number
-  ): Promise<
-    ProviderResult<{ repositories: Repository[]; hasNextPage: boolean }>
-  > {
-    const result = await this.#call(
-      `/user/repos?affiliation=owner&visibility=all&sort=full_name&direction=asc&per_page=100&page=${page}`
-    );
+  ) => Effect.Effect<Page, ProviderError>;
+  readonly listRepositories: () => Effect.Effect<Repository[], ProviderError>;
+  readonly listHooks: (
+    repository: Repository
+  ) => Effect.Effect<RepositoryHook[], ProviderError>;
+  readonly createHook: (
+    repository: Repository
+  ) => Effect.Effect<RepositoryHook, ProviderError>;
+  readonly repairHook: (
+    repository: Repository,
+    hookId: number
+  ) => Effect.Effect<RepositoryHook, ProviderError>;
+  readonly pingHook: (
+    repository: Repository,
+    hookId: number
+  ) => Effect.Effect<null, ProviderError>;
+  readonly deliveries: (
+    repository: Repository,
+    hookId: number
+  ) => Effect.Effect<Delivery[], ProviderError>;
+}
 
-    if (!result.ok) {
-      return result;
-    }
+/** Injectable native GitHub provider port. */
+export const GitHubService = Context.Service<Port>("git2linear/GitHub");
 
-    const json = await readJson(result.value);
+const invalid = () => new ProviderError({ kind: "invalid-response" });
 
-    if (!json.ok) {
-      return json;
-    }
+const repositoryPath = (repository: Repository) =>
+  `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/hooks`;
 
-    if (!Array.isArray(json.value)) {
-      return { error: { kind: "invalid-response" }, ok: false };
-    }
+const reposPath =
+  "/user/repos?affiliation=owner&visibility=all&sort=full_name&direction=asc";
 
-    const repositories: Repository[] = [];
+const pagePath = (path: string, page: number) =>
+  `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`;
 
-    for (const value of json.value) {
-      const repository = parseRepository(value);
+const collect = <T>(
+  getPage: (page: number) => Effect.Effect<readonly T[], ProviderError>,
+  maxPages: number
+) =>
+  Effect.gen(function* collectPages() {
+    const items: T[] = [];
 
-      if (!repository) {
-        return { error: { kind: "invalid-response" }, ok: false };
+    for (let page = 1; page <= maxPages; page += 1) {
+      const values = yield* getPage(page);
+
+      if (values.length === 0) {
+        return items;
       }
 
-      if (
-        repository.owner.toLowerCase() === this.#options.owner.toLowerCase()
-      ) {
-        repositories.push(repository);
-      }
+      items.push(...values);
     }
 
-    return {
-      ok: true,
-      value: { hasNextPage: json.value.length > 0, repositories },
-    };
-  }
+    return yield* Effect.fail(invalid());
+  });
 
-  async #call(
+const makeGitHub = (options: GitHubOptions): Port => {
+  const call = Effect.fn("GitHub.request")(function* call(
     path: string,
-    method = "GET",
-    body?: unknown
-  ): Promise<ProviderResult<Response>> {
-    return await request(
+    method?: string,
+    body?: string
+  ) {
+    return yield* requestEffect(
       `https://api.github.com${path}`,
       {
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body,
         headers: {
           Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${this.#options.token}`,
+          Authorization: `Bearer ${options.token}`,
           "Content-Type": "application/json",
           "User-Agent": "git2linear-reconciler",
           "X-GitHub-Api-Version": "2026-03-10",
         },
-        method,
+        method: method ?? "GET",
       },
-      this.#options
+      options
     );
-  }
+  });
 
-  /* oxlint-disable eslint/no-await-in-loop -- Sequential pages must respect provider order and rate limits. */
-  async #list<T>(
-    path: string,
-    parse: (input: unknown) => T | null,
-    maxPages = 5
-  ): Promise<ProviderResult<T[]>> {
-    const values: T[] = [];
+  const repositoryPage = Effect.fn("GitHub.listRepositoryPage")(
+    function* repositoryPage(page: number) {
+      const response = yield* call(pagePath(reposPath, page));
+      const json = yield* readJsonEffect(response);
 
-    for (let page = 1; page <= maxPages; page += 1) {
-      const result = await this.#call(
-        `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`
-      );
+      const entries = yield* Schema.decodeUnknownEffect(RepositoryPage)(
+        json
+      ).pipe(Effect.mapError(invalid));
 
-      if (!result.ok) {
-        return result;
-      }
+      const repositories = entries
+        .filter(
+          (entry) =>
+            entry.owner.login.toLowerCase() === options.owner.toLowerCase()
+        )
+        .map((entry) => ({
+          archived: entry.archived,
+          disabled: entry.disabled,
+          id: entry.id,
+          name: entry.name,
+          owner: entry.owner.login,
+          url: entry.html_url,
+        }));
 
-      const json = await readJson(result.value);
+      return { hasNextPage: entries.length > 0, repositories };
+    }
+  );
 
-      if (!json.ok) {
-        return json;
-      }
+  const listRepositories = Effect.fn("GitHub.listRepositories")(
+    function* listRepositories() {
+      // Continue based on raw page size, even if owner filtering removes every entry.
+      const repositories: Repository[] = [];
 
-      if (!Array.isArray(json.value)) {
-        return { error: { kind: "invalid-response" }, ok: false };
-      }
+      for (let page = 1; page <= 10_000; page += 1) {
+        const result = yield* repositoryPage(page);
+        repositories.push(...result.repositories);
 
-      for (const item of json.value) {
-        const parsed = parse(item);
-
-        if (parsed === null) {
-          return { error: { kind: "invalid-response" }, ok: false };
+        if (!result.hasNextPage) {
+          return repositories;
         }
-
-        values.push(parsed);
       }
 
-      // An extra empty-page read avoids trusting pagination URLs supplied by a remote server.
-      if (json.value.length === 0) {
-        return { ok: true, value: values };
-      }
+      return yield* Effect.fail(invalid());
+    }
+  );
+
+  const hookPage = Effect.fn("GitHub.hookPage")(function* hookPage(
+    repository: Repository,
+    page: number
+  ) {
+    const response = yield* call(pagePath(repositoryPath(repository), page));
+    const json = yield* readJsonEffect(response);
+
+    const hooks = yield* Schema.decodeUnknownEffect(HookPage)(json).pipe(
+      Effect.mapError(invalid)
+    );
+
+    return hooks.map((hook) => ({
+      active: hook.active,
+      contentType: hook.config.content_type,
+      endpoint: hook.config.url,
+      events: hook.events,
+      id: hook.id,
+      insecureSsl: hook.config.insecure_ssl,
+    }));
+  });
+
+  const listHooks = Effect.fn("GitHub.listHooks")((repository: Repository) =>
+    collect((page) => hookPage(repository, page), 5)
+  );
+
+  const writeHook = Effect.fn("GitHub.writeHook")(function* writeHook(
+    repository: Repository,
+    id: number | null
+  ) {
+    const { endpoint, webhookSecret } = options;
+
+    if (endpoint === undefined || webhookSecret === undefined) {
+      return yield* Effect.fail(invalid());
     }
 
-    return { error: { kind: "invalid-response" }, ok: false };
-  }
+    const parsed = yield* Effect.try({
+      catch: invalid,
+      try: () => new URL(endpoint),
+    });
 
-  /** Discover all visible owned repositories, including private repositories and forks.
-   * @returns Complete visible owned inventory, or safe error.
-   */
-  async listRepositories(): Promise<ProviderResult<Repository[]>> {
-    const result = await this.#list(
-      "/user/repos?affiliation=owner&visibility=all&sort=full_name&direction=asc",
-      parseRepository,
-      10_000
+    if (
+      parsed.protocol !== "https:" ||
+      !(
+        parsed.hostname === "linear.app" ||
+        parsed.hostname.endsWith(".linear.app")
+      ) ||
+      parsed.username + parsed.password !== ""
+    ) {
+      return yield* Effect.fail(invalid());
+    }
+
+    const config = { content_type: "json", insecure_ssl: "0", url: endpoint };
+
+    const response = yield* call(
+      repositoryPath(repository) + (id === null ? "" : `/${id}`),
+      id === null ? "POST" : "PATCH",
+      JSON.stringify({
+        active: true,
+        config: id === null ? { ...config, secret: webhookSecret } : config,
+        events: ["push"],
+        name: "web",
+      })
     );
 
-    return result.ok
-      ? {
-          ok: true,
-          value: result.value.filter(
-            (repo) =>
-              repo.owner.toLowerCase() === this.#options.owner.toLowerCase()
-          ),
-        }
-      : result;
-  }
+    const json = yield* readJsonEffect(response);
 
-  static #path(repository: Repository): string {
-    return `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/hooks`;
-  }
+    const hook = yield* Schema.decodeUnknownEffect(HookResponse)(json).pipe(
+      Effect.mapError(invalid)
+    );
 
-  /** Read all hooks; unrelated hooks are returned solely for safe planning.
-   * @param repository - Existing verified repository or hook identity.
-   * @returns Provider result requiring saved-state verification.
+    return {
+      active: hook.active,
+      contentType: hook.config.content_type,
+      endpoint: hook.config.url,
+      events: hook.events,
+      id: hook.id,
+      insecureSsl: hook.config.insecure_ssl,
+    };
+  });
+
+  const createHook = Effect.fn("GitHub.createHook")((repository: Repository) =>
+    writeHook(repository, null)
+  );
+
+  const repairHook = Effect.fn("GitHub.repairHook")(function* repairHook(
+    repository: Repository,
+    hookId: number
+  ) {
+    if (options.endpoint === undefined || options.webhookSecret === undefined) {
+      return yield* Effect.fail(invalid());
+    }
+
+    const hooks = yield* listHooks(repository);
+
+    if (
+      !hooks.some(
+        (hook) => hook.id === hookId && hook.endpoint === options.endpoint
+      )
+    ) {
+      return yield* Effect.fail(invalid());
+    }
+
+    return yield* writeHook(repository, hookId);
+  });
+
+  const pingHook = Effect.fn("GitHub.pingHook")(function* pingHook(
+    repository: Repository,
+    hookId: number
+  ) {
+    yield* call(`${repositoryPath(repository)}/${hookId}/pings`, "POST");
+
+    return null;
+  });
+
+  const deliveryPage = Effect.fn("GitHub.deliveryPage")(function* deliveryPage(
+    repository: Repository,
+    hookId: number,
+    page: number
+  ) {
+    const response = yield* call(
+      pagePath(`${repositoryPath(repository)}/${hookId}/deliveries`, page)
+    );
+
+    const json = yield* readJsonEffect(response);
+
+    const deliveries = yield* Schema.decodeUnknownEffect(DeliveryPage)(
+      json
+    ).pipe(Effect.mapError(invalid));
+
+    return deliveries.map((delivery) => ({
+      event: delivery.event,
+      id: delivery.id,
+      statusCode: delivery.status_code,
+    }));
+  });
+
+  const deliveries = Effect.fn("GitHub.deliveries")(
+    (repository: Repository, hookId: number) =>
+      collect((page) => deliveryPage(repository, hookId, page), 5)
+  );
+
+  return GitHubService.of({
+    createHook,
+    deliveries,
+    listHooks,
+    listRepositories,
+    listRepositoryPage: repositoryPage,
+    pingHook,
+    repairHook,
+  });
+};
+
+/** Construct a layer for the native GitHub port.
+ * @param options - Provider configuration.
+ * @returns The provider layer.
+ */
+export const githubLayer = (options: GitHubOptions) =>
+  Layer.succeed(GitHubService, makeGitHub(options));
+
+const decodeFailure = Schema.decodeUnknownSync(ProviderFailureSchema);
+
+const legacy = async <T>(
+  effect: Effect.Effect<T, ProviderError>
+): Promise<ProviderResult<T>> =>
+  await Effect.runPromise(
+    effect.pipe(
+      Effect.match({
+        onFailure: (error): ProviderResult<T> => ({
+          error: decodeFailure(error),
+          ok: false,
+        }),
+        onSuccess: (value): ProviderResult<T> => ({ ok: true, value }),
+      })
+    )
+  );
+
+/** GitHub REST adapter with native effects and transitional Promise methods. */
+export class GitHubClient {
+  /** Native provider operations for Effect consumers. */
+  readonly effects: Port;
+  /** Construct the authenticated provider. */
+  constructor(options: GitHubOptions) {
+    this.effects = makeGitHub(options);
+  }
+  /** Read one bounded inventory page.
+   * @param page - One-based page number.
+   * @returns A provider result.
+   */
+  async listRepositoryPage(page: number): Promise<ProviderResult<Page>> {
+    return await legacy(this.effects.listRepositoryPage(page));
+  }
+  /** Discover all owned repositories.
+   * @returns A provider result.
+   */
+  async listRepositories(): Promise<ProviderResult<Repository[]>> {
+    return await legacy(this.effects.listRepositories());
+  }
+  /** Read repository hooks.
+   * @param repository - Target repository.
+   * @returns A provider result.
    */
   async listHooks(
     repository: Repository
   ): Promise<ProviderResult<RepositoryHook[]>> {
-    return await this.#list(GitHubClient.#path(repository), parseHook);
+    return await legacy(this.effects.listHooks(repository));
   }
-
-  /** Create one native push hook. Caller must rediscover after ambiguous failures.
-   * @param repository - Existing verified repository or hook identity.
-   * @returns Provider result requiring saved-state verification.
+  /** Create a push hook.
+   * @param repository - Target repository.
+   * @returns A provider result.
    */
   async createHook(
     repository: Repository
   ): Promise<ProviderResult<RepositoryHook>> {
-    return await this.#writeHook(repository, null);
+    return await legacy(this.effects.createHook(repository));
   }
-
-  /** Repair only an existing exact endpoint match, retaining its existing signing secret.
-   * @param repository - Existing verified repository or hook identity.
-   * @param hookId - Existing verified repository or hook identity.
-   * @returns Provider result requiring saved-state verification.
+  /** Repair a matching hook without replacing its secret.
+   * @param repository - Target repository.
+   * @param hookId - Hook identifier.
+   * @returns A provider result.
    */
   async repairHook(
     repository: Repository,
     hookId: number
   ): Promise<ProviderResult<RepositoryHook>> {
-    const hooks = await this.listHooks(repository);
-
-    if (!hooks.ok) {
-      return hooks;
-    }
-
-    if (
-      !hooks.value.some(
-        (hook) => hook.id === hookId && hook.endpoint === this.#options.endpoint
-      )
-    ) {
-      return { error: { kind: "invalid-response" }, ok: false };
-    }
-
-    return await this.#writeHook(repository, hookId);
+    return await legacy(this.effects.repairHook(repository, hookId));
   }
-
-  async #writeHook(
-    repository: Repository,
-    id: number | null
-  ): Promise<ProviderResult<RepositoryHook>> {
-    if (
-      this.#options.endpoint === undefined ||
-      this.#options.webhookSecret === undefined
-    ) {
-      return { error: { kind: "invalid-response" }, ok: false };
-    }
-
-    try {
-      const endpoint = new URL(this.#options.endpoint);
-
-      if (
-        endpoint.protocol !== "https:" ||
-        !(
-          endpoint.hostname === "linear.app" ||
-          endpoint.hostname.endsWith(".linear.app")
-        ) ||
-        endpoint.username !== "" ||
-        endpoint.password !== ""
-      ) {
-        return { error: { kind: "invalid-response" }, ok: false };
-      }
-    } catch {
-      return { error: { kind: "invalid-response" }, ok: false };
-    }
-
-    const result = await this.#call(
-      GitHubClient.#path(repository) + (id === null ? "" : `/${id}`),
-      id === null ? "POST" : "PATCH",
-      {
-        active: true,
-        config: {
-          content_type: "json",
-          insecure_ssl: "0",
-          url: this.#options.endpoint,
-          // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- Omitting secret on PATCH preserves the existing secret; undefined is not sent.
-          ...(id === null ? { secret: this.#options.webhookSecret } : {}),
-        },
-        events: ["push"],
-        name: "web",
-      }
-    );
-
-    if (!result.ok) {
-      return result;
-    }
-
-    const json = await readJson(result.value);
-
-    if (!json.ok) {
-      return json;
-    }
-
-    const parsed = parseHook(json.value);
-
-    return parsed === null
-      ? { error: { kind: "invalid-response" }, ok: false }
-      : { ok: true, value: parsed };
-  }
-
-  /** Request GitHub's ping; acceptance is distinct from delivery success.
-   * @param repository - Existing verified repository or hook identity.
-   * @param hookId - Existing verified repository or hook identity.
-   * @returns Provider result requiring saved-state verification.
+  /** Request a ping.
+   * @param repository - Target repository.
+   * @param hookId - Hook identifier.
+   * @returns A provider result.
    */
   async pingHook(
     repository: Repository,
     hookId: number
   ): Promise<ProviderResult<null>> {
-    const result = await this.#call(
-      `${GitHubClient.#path(repository)}/${hookId}/pings`,
-      "POST"
-    );
-
-    return result.ok ? { ok: true, value: null } : result;
+    return await legacy(this.effects.pingHook(repository, hookId));
   }
-
-  /** Inspect delivery status without fetching request/response payloads.
-   * @param repository - Existing verified repository or hook identity.
-   * @param hookId - Existing verified repository or hook identity.
-   * @returns Provider result requiring saved-state verification.
+  /** Read delivery summaries.
+   * @param repository - Target repository.
+   * @param hookId - Hook identifier.
+   * @returns A provider result.
    */
   async deliveries(
     repository: Repository,
     hookId: number
-  ): Promise<
-    ProviderResult<{ id: number; event: string; statusCode: number | null }[]>
-  > {
-    return await this.#list(
-      `${GitHubClient.#path(repository)}/${hookId}/deliveries`,
-      (input) => {
-        if (
-          !record(input) ||
-          !positiveId(input.id) ||
-          typeof input.event !== "string" ||
-          !(input.status_code === null || typeof input.status_code === "number")
-        ) {
-          return null;
-        }
-
-        return {
-          event: input.event,
-          id: input.id,
-          statusCode: input.status_code,
-        };
-      }
-    );
+  ): Promise<ProviderResult<Delivery[]>> {
+    return await legacy(this.effects.deliveries(repository, hookId));
   }
 }
