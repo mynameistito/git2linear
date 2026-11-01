@@ -52,7 +52,9 @@ export const deploymentConfig = Effect.gen(function* readDeploymentConfig() {
 
     yield* Schema.decodeUnknownEffect(Schema.Literal(true))(
       address.protocol === "https:" &&
-        ["api.linear.app", "linear.app"].includes(address.hostname) &&
+        ["api.linear.app", "client-api.linear.app", "linear.app"].includes(
+          address.hostname
+        ) &&
         !hasCredentialsOrFragment
     ).pipe(Effect.mapError((error) => new Config.ConfigError(error)));
   }

@@ -43,16 +43,19 @@ describe("Alchemy deployment configuration", () => {
     expect(result._tag).toBe("Success");
   });
 
-  it("accepts the other supported Linear host", async () => {
-    const result = await load({
-      ...base,
-      ALCHEMY_CONFIRMED_BINDINGS: "core+webhook",
-      LINEAR_WEBHOOK_SECRET: "synthetic-secret",
-      LINEAR_WEBHOOK_URL: "https://linear.app/hooks/test",
-    });
+  it.each(["linear.app", "client-api.linear.app"])(
+    "accepts supported host %s",
+    async (host) => {
+      const result = await load({
+        ...base,
+        ALCHEMY_CONFIRMED_BINDINGS: "core+webhook",
+        LINEAR_WEBHOOK_SECRET: "synthetic-secret",
+        LINEAR_WEBHOOK_URL: `https://${host}/hooks/test`,
+      });
 
-    expect(result._tag).toBe("Success");
-  });
+      expect(result._tag).toBe("Success");
+    }
+  );
 
   it.each([
     ["http:", "//linear.app/hook"].join(""),
