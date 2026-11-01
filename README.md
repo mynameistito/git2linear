@@ -1,12 +1,10 @@
 <h1>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/gitline-logo-dark.svg">
-    <img src="docs/assets/gitline-logo.svg" alt="" width="32" height="32" align="absmiddle">
+    <img src="docs/assets/gitline-logo.svg" alt="" width="64" height="64" align="absmiddle">
   </picture>
   Gitline
 </h1>
-
-**Your repos. In line.**
 
 **Automatically create and maintain Linear projects for your GitHub repositories.**
 
