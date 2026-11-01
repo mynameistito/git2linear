@@ -16,6 +16,7 @@
     "dev": "cf dev",
     "varlock:codegen": "varlock codegen",
     "varlock:alchemy:plan": "varlock run --filter=\"#deploy\" --inject=vars -- node node_modules/alchemy/bin/cli.js plan --stage production",
+    "varlock:alchemy:preflight": "varlock run --filter=\"#deploy\" --inject=vars -- bun scripts/deployment-preflight.ts",
     "varlock:alchemy:deploy": "varlock run --filter=\"#deploy\" --inject=vars -- node node_modules/alchemy/bin/cli.js deploy --stage production",
     "varlock:provision": "varlock run --filter=\"#provision\" --inject=vars -- bun scripts/provision-secrets.ts",
     "varlock:operate": "varlock run --filter=\"#operator\" --inject=vars -- bun scripts/operate.ts",

@@ -2,17 +2,28 @@ import {
   CloudflareEnvironment,
   DurableObject,
   providers,
+  state,
   Worker,
 } from "@alchemy.run/cloudflare";
-import { AdoptPolicy, localState, Stack } from "alchemy";
-import { Effect } from "effect";
+import { AdoptPolicy, Stack } from "alchemy";
+import { ConfigProvider, Effect, Layer } from "effect";
 
 import { deploymentConfig } from "./alchemy/deployment";
 import { workerIdentity } from "./src/platform/deployment.ts";
 
 export default Stack(
   workerIdentity.name,
-  { providers: providers(), state: localState() },
+  {
+    providers: providers(),
+    // Missing or outdated shared stores must fail even for local plans.
+    state: state().pipe(
+      Layer.provide(
+        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ CI: "true" }), {
+          asPrimary: true,
+        })
+      )
+    ),
+  },
   Effect.gen(function* stack() {
     const config = yield* deploymentConfig;
 
