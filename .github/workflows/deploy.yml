@@ -25,15 +25,15 @@ jobs:
         with:
           version: 2.39.0
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          CLOUDFLARE_DEPLOY_API_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/CLOUDFLARE_DEPLOY_API_TOKEN
-          APP_GITHUB_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/GITHUB_TOKEN
-          APP_LINEAR_API_KEY: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_API_KEY
-          APP_LINEAR_WEBHOOK_URL: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_WEBHOOK_URL
-          APP_LINEAR_WEBHOOK_SECRET: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_WEBHOOK_SECRET
-          APP_MANUAL_TRIGGER_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/MANUAL_TRIGGER_TOKEN
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_TARGET_SERVICE_ACCOUNT_TOKEN }}
+          CLOUDFLARE_DEPLOY_API_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/cloudflare_deploy_api_token
+          APP_GITHUB_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/credential
+          APP_LINEAR_API_KEY: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_api_key
+          APP_LINEAR_WEBHOOK_URL: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_webhook_url
+          APP_LINEAR_WEBHOOK_SECRET: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_webhook_secret
+          APP_MANUAL_TRIGGER_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/manual_trigger_token
       - name: Deploy the exact CI commit
-        uses: mynameistito/alchemy-deploy@382135917559d72946e7c67a0752eaf4c12c785f
+        uses: mynameistito/alchemy-deploy@0db293d18c4d6d99926cd74488f7eb6a26aa73bc # v4.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CLOUDFLARE_ACCOUNT_ID: 402722ab1f598e783cd6dcdedc37e1d0

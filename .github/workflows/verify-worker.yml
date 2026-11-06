@@ -16,6 +16,41 @@ permissions:
   contents: read
 
 jobs:
+  validate_1password:
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.repository == 'mynameistito/git2linear' && github.ref == 'refs/heads/chore/git2linear-verified-refs'
+    permissions: {}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Load target references
+        id: op
+        uses: 1Password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5
+        with:
+          version: 2.39.0
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_TARGET_SERVICE_ACCOUNT_TOKEN }}
+          CLOUDFLARE_DEPLOY_API_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/cloudflare_deploy_api_token
+          APP_GITHUB_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/credential
+          APP_LINEAR_API_KEY: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_api_key
+          APP_LINEAR_WEBHOOK_URL: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_webhook_url
+          APP_LINEAR_WEBHOOK_SECRET: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_webhook_secret
+          APP_MANUAL_TRIGGER_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/manual_trigger_token
+      - name: Check values are present
+        env:
+          CLOUDFLARE_DEPLOY_API_TOKEN: ${{ steps.op.outputs.CLOUDFLARE_DEPLOY_API_TOKEN }}
+          APP_GITHUB_TOKEN: ${{ steps.op.outputs.APP_GITHUB_TOKEN }}
+          APP_LINEAR_API_KEY: ${{ steps.op.outputs.APP_LINEAR_API_KEY }}
+          APP_LINEAR_WEBHOOK_URL: ${{ steps.op.outputs.APP_LINEAR_WEBHOOK_URL }}
+          APP_LINEAR_WEBHOOK_SECRET: ${{ steps.op.outputs.APP_LINEAR_WEBHOOK_SECRET }}
+          APP_MANUAL_TRIGGER_TOKEN: ${{ steps.op.outputs.APP_MANUAL_TRIGGER_TOKEN }}
+        run: |
+          test -n "$CLOUDFLARE_DEPLOY_API_TOKEN"
+          test -n "$APP_GITHUB_TOKEN"
+          test -n "$APP_LINEAR_API_KEY"
+          test -n "$APP_LINEAR_WEBHOOK_URL"
+          test -n "$APP_LINEAR_WEBHOOK_SECRET"
+          test -n "$APP_MANUAL_TRIGGER_TOKEN"
   verify:
     if: github.repository == 'mynameistito/git2linear' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
@@ -33,8 +68,8 @@ jobs:
         with:
           version: 2.39.0
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          MANUAL_TRIGGER_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/MANUAL_TRIGGER_TOKEN
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_TARGET_SERVICE_ACCOUNT_TOKEN }}
+          MANUAL_TRIGGER_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/manual_trigger_token
       - name: Verify Worker
         env:
           MANUAL_TRIGGER_TOKEN: ${{ steps.operator.outputs.MANUAL_TRIGGER_TOKEN }}
