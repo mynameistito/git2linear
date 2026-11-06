@@ -33,7 +33,7 @@ jobs:
           APP_LINEAR_WEBHOOK_SECRET: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_webhook_secret
           APP_MANUAL_TRIGGER_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/manual_trigger_token
       - name: Deploy the exact CI commit
-        uses: mynameistito/alchemy-deploy@382135917559d72946e7c67a0752eaf4c12c785f
+        uses: mynameistito/alchemy-deploy@0db293d18c4d6d99926cd74488f7eb6a26aa73bc # v4.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CLOUDFLARE_ACCOUNT_ID: 402722ab1f598e783cd6dcdedc37e1d0
