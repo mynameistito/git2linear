@@ -18,9 +18,7 @@ permissions:
 jobs:
   validate_1password:
     if: >-
-      github.event_name == 'workflow_dispatch' &&
-      github.repository == 'mynameistito/git2linear' &&
-      github.ref == 'refs/heads/chore/git2linear-verified-refs'
+      github.event_name == 'workflow_dispatch' && github.repository == 'mynameistito/git2linear' && github.ref == 'refs/heads/chore/git2linear-verified-refs'
     permissions: {}
     runs-on: ubuntu-24.04
     steps:
