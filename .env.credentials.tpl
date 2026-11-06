@@ -1,6 +1,6 @@
-GITHUB_TOKEN=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/GITHUB_TOKEN
-LINEAR_API_KEY=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_API_KEY
-MANUAL_TRIGGER_TOKEN=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/MANUAL_TRIGGER_TOKEN
-CLOUDFLARE_API_TOKEN=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/CLOUDFLARE_API_TOKEN
-LINEAR_WEBHOOK_URL=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_WEBHOOK_URL
-LINEAR_WEBHOOK_SECRET=op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/LINEAR_WEBHOOK_SECRET
+GITHUB_TOKEN=op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/credential
+LINEAR_API_KEY=op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_api_key
+MANUAL_TRIGGER_TOKEN=op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/manual_trigger_token
+CLOUDFLARE_API_TOKEN=op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/cloudflare_api_token
+LINEAR_WEBHOOK_URL=op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_webhook_url
+LINEAR_WEBHOOK_SECRET=op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/linear_webhook_secret

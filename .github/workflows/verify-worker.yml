@@ -34,7 +34,7 @@ jobs:
           version: 2.39.0
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          MANUAL_TRIGGER_TOKEN: op://github-actions/7qcdyu375b6v2xep2xovcnnhjy/MANUAL_TRIGGER_TOKEN
+          MANUAL_TRIGGER_TOKEN: op://i56qshgciuy4cdg4pjrilaeriy/pvt53g6cq5kb5mklpsgamyuwou/manual_trigger_token
       - name: Verify Worker
         env:
           MANUAL_TRIGGER_TOKEN: ${{ steps.operator.outputs.MANUAL_TRIGGER_TOKEN }}
